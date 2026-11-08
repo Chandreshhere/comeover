@@ -1,0 +1,13 @@
+Priority,Workstream,Deliverable,Implementation note,Acceptance criteria
+P0,Foundation,"Set up app shell, navigation, design tokens, analytics and CI","Build shared typography, cards, chips, buttons, bottom nav and error boundaries",App launches on iOS/Android; theme tokens are shared; analytics consent respected
+P0,Trust & onboarding,"OTP, 18+ gate, profile, interests, privacy and safety onboarding",Users understand the app is platonic/activity-led and consent to location separately,No user can publish/join without age gate; permissions are explained and optional browse path works
+P0,Activity network,"Create, browse, search, request-to-join, host approval, cancel and capacity",End-to-end plan lifecycle with server-side authorization,"Two test accounts can publish, discover, request, accept and complete one plan"
+P0,Messaging,"Activity-scoped chat, group messages, mute, block and report",Chat opens only after approved join; moderation controls always available,Blocked users cannot send or view future direct communications
+P0,Safety admin,"Admin dashboard, report queue, suspend, appeal and audit log",Moderation operations before public launch,Test reports appear in queue; decisions are audited; emergency contact steps documented
+P1,Location & reliability,"Coarse geospatial search, optional check-in, two-sided completion",Never expose live precise user coordinates,Nearby plan list works with location off via city/area selection; check-in has manual fallback
+P1,Progression,"Daily quests, weekly goals, roadmap, XP and badges",Only verified activity events award XP; include rest days and anti-gaming,No XP for swipes/messages; duplicate activity cannot double-award XP
+P1,SplitMate,Equal/custom/itemised bill ledger and UPI app handoff,No fund custody or wallet in MVP,Participants can view shares and mark/confirm settlement; no card/UPI PIN data stored
+P1,Notifications,"Push categories, quiet hours, deep links and frequency caps",User-controlled notification preferences,No marketing push without consent; quiet hours and unsubscribe work
+P2,Monetization,StoreKit/Play Billing subscriptions and entitlement server,Feature matrix remotely configurable,Purchase/restore/expiry/refund states verified in sandbox
+P2,Business hub,"Venue verification, sponsored plans and campaign reporting",Paid placements visibly labelled,Pilot campaign reports clicks/joins/check-ins; no guaranteed attendance claims
+P2,Widgets & mascot,"iOS WidgetKit/Android widgets, Rive mascot and advanced roadmap animation",Native widget and asset performance audit,Widgets deep-link to app and never expose precise location or private plan details

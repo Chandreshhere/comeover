@@ -1,0 +1,37 @@
+{
+  "task": "Build a complete, production-oriented mobile UI for an India-first, platonic, peer-to-peer real-world activity network. Use the attached three-phone screenshot as the visual reference for style and composition.",
+  "reference": "reference_ui_mapping.json",
+  "must_match_reference_style": [
+    "cool light-grey showcase canvas",
+    "three rounded mobile surfaces",
+    "periwinkle blue as signature surface",
+    "white dashboard cards",
+    "black pill primary CTAs",
+    "soft pink/orange supporting cards",
+    "bold rounded typography",
+    "playful editorial vector illustrations",
+    "clear progress/roadmap motifs"
+  ],
+  "product_translation": {
+    "left_screen": "Social Roadmap + Daily Quests: large headline, original active mascot, week strip, quest cards, XP and level progress.",
+    "middle_screen": "Discover home: greeting/avatar, city area, search, featured nearby activity card, quick category chips, activity cards, bottom navigation.",
+    "right_screen": "Plan Assistant: original animated orb/mascot, quick mood chips, text input, suggested plan creation, small roadmap progress preview. Never force AI; include a manual flow."
+  },
+  "design_constraints": [
+    "Create every screen in screen_inventory.json, including loading, empty, error, permission and safety states.",
+    "Use shared tokens from design_tokens.json.",
+    "Do not copy any third-party logo, mascot, wording, icons, or branded illustration from the reference.",
+    "Design responsive layouts for common Android and iPhone sizes; avoid fixed screenshot coordinates.",
+    "Keep core discovery, plan creation, joining, messaging required for plans, blocking and reporting available to free users.",
+    "Use animation spec from motion_system.json; provide reduced-motion equivalents."
+  ],
+  "output_expectations": [
+    "high-fidelity screen set",
+    "reusable component library",
+    "navigation map",
+    "all modal/sheet states",
+    "interactive prototype links",
+    "design token export",
+    "screen-by-screen acceptance checklist"
+  ]
+}

@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.0.0",
+  "creative_direction": "Original playful progression animation inspired by the responsiveness and reward clarity of language-learning apps. Do not copy Duolingo's owl, sounds, exact streak flame, illustrations, copy or proprietary timing/visual assets.",
+  "principles": [
+    "celebrate completed real-world actions, not addictive app time",
+    "animations are brief, purposeful and interruptible",
+    "no motion-only information",
+    "respect iOS Reduce Motion and Android animator settings",
+    "sound off by default; haptics optional"
+  ],
+  "tokens": {
+    "micro_ms": 120,
+    "standard_ms": 220,
+    "expressive_ms": 360,
+    "celebration_ms": 650,
+    "spring": {
+      "damping": 16,
+      "stiffness": 180,
+      "mass": 0.8
+    },
+    "enter_offset_dp": 12
+  },
+  "patterns": [
+    {
+      "id": "mascot_idle",
+      "trigger": "home screen idle",
+      "motion": "slow breathing/float, occasional blink or glance",
+      "duration_ms": 2600,
+      "loop": true,
+      "priority": "P2"
+    },
+    {
+      "id": "mascot_success",
+      "trigger": "completed activity confirmed by participants",
+      "motion": "mascot jumps, confetti dots burst, XP counter rolls up",
+      "duration_ms": 850,
+      "sound": "optional short original chime",
+      "haptic": "success",
+      "priority": "P1"
+    },
+    {
+      "id": "quest_complete",
+      "trigger": "quest criteria met",
+      "motion": "card compresses 0.98, checkmark draws, XP chip flies to level meter",
+      "duration_ms": 620,
+      "priority": "P1"
+    },
+    {
+      "id": "streak_increment",
+      "trigger": "verified qualifying activity adds a day",
+      "motion": "streak symbol pulses once; calendar cell fills",
+      "duration_ms": 500,
+      "haptic": "light",
+      "priority": "P1"
+    },
+    {
+      "id": "level_up",
+      "trigger": "XP reaches threshold",
+      "motion": "full-screen milestone sheet, original mascot reacts, progress path node unlocks",
+      "duration_ms": 1100,
+      "skippable": true,
+      "priority": "P2"
+    },
+    {
+      "id": "activity_card_join",
+      "trigger": "tap Join",
+      "motion": "button morphs to Request sent / Joined with spring scale and progress shimmer",
+      "duration_ms": 300,
+      "priority": "P0"
+    },
+    {
+      "id": "radar_pulse",
+      "trigger": "live plans refresh",
+      "motion": "one subtle ring pulse on plan clusters, no flashing user markers",
+      "duration_ms": 900,
+      "loop": false,
+      "priority": "P1"
+    },
+    {
+      "id": "roadmap_unlock",
+      "trigger": "milestone reached",
+      "motion": "path draws to next node; node blooms with a color fill",
+      "duration_ms": 720,
+      "priority": "P2"
+    },
+    {
+      "id": "bottom_nav",
+      "trigger": "tab change",
+      "motion": "icon fill and label fade/slide 3dp",
+      "duration_ms": 180,
+      "priority": "P0"
+    },
+    {
+      "id": "sheet_present",
+      "trigger": "open modal/bottom sheet",
+      "motion": "sheet rises 18dp with fade; background dims",
+      "duration_ms": 240,
+      "priority": "P0"
+    }
+  ],
+  "quest_rules": {
+    "qualifying_actions": [
+      "activity completion confirmed by host and at least one attendee or verified group check-in",
+      "new category explored after completion",
+      "hosted plan completed without cancellation abuse"
+    ],
+    "non_qualifying_actions": [
+      "swipes",
+      "likes",
+      "message volume",
+      "joining without attendance",
+      "creating duplicate plans"
+    ],
+    "streak_policy": "Weekly consistency goal by default (e.g. 2 verified activities/week), optional daily streak for users who opt in; include rest days and one recover/freeze mechanic; never punish inactivity with lost social access.",
+    "anti_gaming": [
+      "daily XP cap",
+      "deduplicate participants and repeated same-plan actions",
+      "mutual confirmation or proximity check-in with manual appeal",
+      "risk-based anomaly review"
+    ]
+  },
+  "engineering": {
+    "preferred_stack": "React Native Reanimated for UI transitions/gestures; Rive for original mascot and stateful character animations; native haptics API; optional Lottie for lightweight one-shot effects",
+    "performance": "target 60fps on mainstream devices; lazy-load large animation assets; provide static fallback",
+    "analytics_events": [
+      "quest_viewed",
+      "quest_started",
+      "quest_completed",
+      "streak_incremented",
+      "level_up_shown",
+      "animation_skipped"
+    ]
+  }
+}

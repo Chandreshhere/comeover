@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0.0",
+  "project": "IRL Activity Network (working title; name not final)",
+  "source_reference": {
+    "filename": "8 Web Design Trends 2026 _ VistaPrint US.jpg",
+    "source": "User-provided image in this conversation",
+    "canvas_px": {
+      "width": 736,
+      "height": 552
+    },
+    "interpretation": "Three overlapping mobile mockups on a soft cool-grey canvas. Use the same composition, hierarchy, rounded geometry, pale periwinkle surfaces, white cards, black pill CTAs and playful editorial illustration style as a design reference. Adapt all content and make original assets; do not copy another product's logo, mascot, copy or proprietary icons."
+  },
+  "composition": {
+    "canvas": {
+      "background": "#D9DCE5",
+      "safe_margin_px": 24,
+      "presentation": "three device mockups with soft shadows; front-facing, no perspective warp"
+    },
+    "devices": [
+      {
+        "id": "journey_phone",
+        "reference_bounds_px": {
+          "x": 37,
+          "y": 36,
+          "width": 199,
+          "height": 420
+        },
+        "layer": 1,
+        "corner_radius_ratio": 0.15,
+        "surface": "#9CB9FF",
+        "role": "Social roadmap, streaks and quests"
+      },
+      {
+        "id": "discover_phone",
+        "reference_bounds_px": {
+          "x": 271,
+          "y": 64,
+          "width": 192,
+          "height": 432
+        },
+        "layer": 2,
+        "corner_radius_ratio": 0.15,
+        "surface": "#FFFFFF",
+        "role": "Main activity discovery dashboard"
+      },
+      {
+        "id": "guide_phone",
+        "reference_bounds_px": {
+          "x": 490,
+          "y": 96,
+          "width": 209,
+          "height": 419
+        },
+        "layer": 3,
+        "corner_radius_ratio": 0.15,
+        "surface": "#FFFFFF",
+        "role": "Plan assistant and progress roadmap"
+      }
+    ],
+    "visual_language": {
+      "primary_accent": "#9CB9FF",
+      "surface": "#FFFFFF",
+      "background": "#F2F3F8",
+      "ink": "#08090D",
+      "muted": "#767985",
+      "soft_pink": "#E6A2F2",
+      "soft_orange": "#F0A34B",
+      "soft_lavender": "#E5E3FA",
+      "cta": "#050609",
+      "shape_language": "large rounded cards, pill filters, compact circular icon buttons, soft inner contrast, strong black primary CTA",
+      "typography": "rounded geometric sans for headings; neutral highly legible sans for body; bold short labels",
+      "illustration": "one original expressive activity mascot, flat/vector or 2.5D, with small orbiting activity pictograms",
+      "density": "moderate; each screen has one dominant visual, one primary action and a few secondary choices"
+    }
+  },
+  "screen_mapping": {
+    "left_device": {
+      "screen_id": "social_journey_home",
+      "headline": "Your Social Roadmap & Daily Quests",
+      "sections": [
+        "top back and streak controls",
+        "large editorial heading",
+        "decorative activity pictogram cluster",
+        "original mascot in an energetic pose",
+        "weekly streak strip",
+        "My Quests heading",
+        "two dark rounded quest rows with leading circular icon and trailing chevron/progress"
+      ],
+      "adaptation_notes": "Replace course lessons with real-world social milestones; progress must count verified completed activities, not swipes or messages. Include rest-day and streak-freeze options."
+    },
+    "center_device": {
+      "screen_id": "discover_home",
+      "sections": [
+        "avatar plus greeting and level",
+        "notification bell",
+        "search field",
+        "large blue featured live-plan card with title, host, time, people count and Join CTA",
+        "three pill activity filters",
+        "two pastel activity cards with progress or capacity indicator",
+        "five-item bottom navigation"
+      ],
+      "featured_card_example": {
+        "title": "Chai break near you",
+        "subtitle": "4:30 PM · 600 m · 2/4 joined",
+        "cta": "VIEW PLAN"
+      },
+      "adaptation_notes": "The featured card is an activity, not a paid person/companion. Keep activity cards readable at small sizes. Show coarse distance, not exact live user location."
+    },
+    "right_device": {
+      "screen_id": "plan_guide",
+      "title": "Plan Assistant",
+      "sections": [
+        "back and menu controls",
+        "large blue assistant card with animated original orb/mascot",
+        "short prompt suggestion",
+        "camera/mic/text quick input modes where applicable",
+        "usage indicator only if AI limits exist",
+        "chat composer",
+        "suggestion chips such as Quick break / Tonight / Try something new",
+        "compact social roadmap preview"
+      ],
+      "adaptation_notes": "AI is optional and should help shape a plan, not impersonate users or make safety decisions. A non-AI manual creation path must always remain available."
+    }
+  },
+  "implementation_rules": [
+    "Build responsive screen layouts rather than hard-coded screenshot coordinates.",
+    "Use the reference as a visual system, not a pixel-for-pixel clone of a third-party product.",
+    "Create original mascot, pictograms, illustrations, icons, sound and copy.",
+    "Keep touch targets at least 44x44 points on iOS and comfortably large on Android.",
+    "Respect safe areas, dynamic text, screen readers and Reduce Motion.",
+    "Use a consistent 8-point spacing grid and shared card, chip, button and progress components."
+  ]
+}

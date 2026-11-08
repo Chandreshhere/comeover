@@ -1,0 +1,20 @@
+# Local Postgres + PostGIS matching the RDS engine (PostgreSQL 16 + PostGIS 3.4).
+#   docker compose up -d db
+#   DATABASE_URL=postgres://irl:irl@localhost:5432/irl npm run migrate
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: irl
+      POSTGRES_PASSWORD: irl
+      POSTGRES_DB: irl
+    ports:
+      - '5432:5432'
+    volumes:
+      - irl-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U irl']
+      interval: 5s
+      retries: 10
+volumes:
+  irl-pg:

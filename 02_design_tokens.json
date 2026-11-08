@@ -1,0 +1,142 @@
+{
+  "schema_version": "1.0.0",
+  "principles": [
+    "playful but not childish",
+    "activity-first, people-second",
+    "fast, legible and low-friction",
+    "safe by default",
+    "motion communicates state, never blocks the task"
+  ],
+  "color": {
+    "brand_periwinkle": "#9CB9FF",
+    "brand_deep": "#526FC3",
+    "ink": "#090A0E",
+    "ink_soft": "#30323A",
+    "muted": "#767985",
+    "canvas": "#F2F3F8",
+    "surface": "#FFFFFF",
+    "surface_subtle": "#F7F7FA",
+    "border": "#E7E8EF",
+    "pink": "#E6A2F2",
+    "orange": "#F0A34B",
+    "lavender": "#E5E3FA",
+    "success": "#2F9E75",
+    "warning": "#D99525",
+    "danger": "#D94F62",
+    "info": "#5578D8"
+  },
+  "typography": {
+    "display": {
+      "font_family": "rounded geometric sans",
+      "weight": 700,
+      "size_sp": 30,
+      "line_height": 36
+    },
+    "h1": {
+      "weight": 700,
+      "size_sp": 26,
+      "line_height": 32
+    },
+    "h2": {
+      "weight": 700,
+      "size_sp": 20,
+      "line_height": 26
+    },
+    "body": {
+      "weight": 400,
+      "size_sp": 15,
+      "line_height": 22
+    },
+    "label": {
+      "weight": 600,
+      "size_sp": 12,
+      "line_height": 16
+    },
+    "caption": {
+      "weight": 500,
+      "size_sp": 11,
+      "line_height": 14
+    }
+  },
+  "layout": {
+    "base_grid_dp": 8,
+    "screen_horizontal_padding_dp": 20,
+    "card_radius_dp": 24,
+    "sheet_radius_dp": 28,
+    "button_height_dp": 52,
+    "chip_height_dp": 36,
+    "icon_button_dp": 44,
+    "card_gap_dp": 12,
+    "section_gap_dp": 24,
+    "bottom_nav_height_dp": 76
+  },
+  "elevation": {
+    "card": "0 8 24 rgba(23,31,55,0.07)",
+    "floating": "0 12 32 rgba(23,31,55,0.12)"
+  },
+  "components": {
+    "primary_button": {
+      "background": "#090A0E",
+      "text": "#FFFFFF",
+      "radius_dp": 999,
+      "height_dp": 52,
+      "states": [
+        "default",
+        "pressed_scale_0.98",
+        "disabled_opacity_0.4",
+        "loading_spinner"
+      ]
+    },
+    "secondary_button": {
+      "background": "#FFFFFF",
+      "border": "#E7E8EF",
+      "text": "#090A0E",
+      "radius_dp": 999
+    },
+    "activity_card": {
+      "radius_dp": 24,
+      "padding_dp": 16,
+      "surface": "#FFFFFF",
+      "metadata": [
+        "distance_coarse",
+        "start_time",
+        "duration",
+        "joined_count",
+        "host_reliability"
+      ]
+    },
+    "hero_card": {
+      "background": "#9CB9FF",
+      "radius_dp": 28,
+      "padding_dp": 18,
+      "content_limit": "title + concise details + one CTA"
+    },
+    "progress_bar": {
+      "track": "#E8EAF2",
+      "fill": "#090A0E",
+      "height_dp": 7,
+      "radius_dp": 99
+    },
+    "quest_card": {
+      "background": "#090A0E",
+      "text": "#FFFFFF",
+      "radius_dp": 18,
+      "icon_container": "#FFFFFF",
+      "progress": "optional"
+    },
+    "category_chip": {
+      "selected_background": "#090A0E",
+      "selected_text": "#FFFFFF",
+      "unselected_background": "#FFFFFF",
+      "unselected_text": "#30323A",
+      "radius_dp": 999
+    }
+  },
+  "accessibility": {
+    "min_touch_target_dp": 44,
+    "dynamic_type": true,
+    "contrast_target": "WCAG AA for meaningful text",
+    "reduce_motion": "replace travel/scale animations with fades or immediate state changes",
+    "screen_reader_labels_required": true
+  }
+}

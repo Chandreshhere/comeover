@@ -1,0 +1,40 @@
+# Dependencies & build output
+node_modules/
+.next/
+out/
+dist/
+build/
+coverage/
+.aws-sam/
+*.tsbuildinfo
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.keystore
+!mobile/android/app/debug.keystore
+mobile/android/local.properties
+mobile/android/app/google-services.json
+mobile/ios/ProjectIRL/GoogleService-Info.plist
+
+# Native build artefacts
+mobile/ios/Pods/
+mobile/ios/build/
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/build/
+*.xcuserstate
+xcuserdata/
+
+# Third-party reference material (not ours to redistribute)
+8 Web Design Trends 2026 _ VistaPrint US.jpg
+docs/Project_IRL_Implementation_Pack.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log

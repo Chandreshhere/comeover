@@ -1,0 +1,132 @@
+{
+  "schema_version": "1.0.0",
+  "currency": "INR",
+  "positioning": "Free peer-to-peer plans; monetise creator/organiser tools, convenience, local business discovery and clearly labelled sponsorships. Never charge for another person’s presence.",
+  "plans": [
+    {
+      "name": "Free",
+      "price_monthly": 0,
+      "target": "everyone",
+      "features": [
+        "browse and create normal public plans",
+        "request/join plans",
+        "basic group chat",
+        "core safety features",
+        "basic profile and activity history",
+        "core quests and streaks"
+      ]
+    },
+    {
+      "name": "Plus",
+      "test_price_monthly": 149,
+      "alternative_test_price_monthly": 199,
+      "target": "active members",
+      "features": [
+        "saved searches and advanced filters",
+        "more concurrent plan drafts",
+        "availability scheduling",
+        "enhanced activity insights",
+        "profile themes and badges",
+        "advanced circle discovery"
+      ]
+    },
+    {
+      "name": "Pro",
+      "test_price_monthly": 399,
+      "alternative_test_price_monthly": 499,
+      "target": "power hosts and community organisers",
+      "features": [
+        "recurring plan templates",
+        "larger group tools subject to safety limits",
+        "co-host roles",
+        "community analytics",
+        "scheduled quest challenges",
+        "exportable event attendance summary"
+      ]
+    },
+    {
+      "name": "Venue / Club",
+      "test_price_monthly": 999,
+      "alternative_test_price_monthly": 1499,
+      "target": "local businesses, clubs and organisers",
+      "features": [
+        "verified venue/club profile",
+        "sponsored activity slots",
+        "campaign analytics",
+        "offer tracking",
+        "multiple staff roles"
+      ]
+    }
+  ],
+  "monetization_streams": [
+    {
+      "name": "Subscriptions",
+      "timing": "after repeat usage is proven",
+      "notes": "Keep free core discovery, joining and safety. Test price sensitivity via randomized cohorts."
+    },
+    {
+      "name": "Sponsored activities",
+      "timing": "pilot with 5-10 local venues",
+      "notes": "Label paid placement clearly; disclose ranking impact."
+    },
+    {
+      "name": "Venue/club plans",
+      "timing": "after local liquidity",
+      "notes": "Sell qualified local discovery, not guaranteed attendance."
+    },
+    {
+      "name": "Event ticketing/referrals",
+      "timing": "later",
+      "notes": "Use authorised ticketing/payment partners and clear refund terms."
+    },
+    {
+      "name": "Optional activity boosts",
+      "timing": "later",
+      "notes": "Never let paid boosts bypass safety, spam controls or relevance; cap per user/day."
+    }
+  ],
+  "paywall_policy": {
+    "never_gate": [
+      "safety",
+      "reporting",
+      "blocking",
+      "basic join and create",
+      "basic group chat needed for accepted plans"
+    ],
+    "do_not_trigger": "Do not force a paywall immediately after the second or third meetup. Offer a value-led contextual trial after the user has experienced repeat value; keep core network free.",
+    "store_billing": "Digital app features and subscriptions should use Apple In-App Purchase / Google Play Billing where required by the current storefront policies."
+  },
+  "unit_economics_examples": [
+    {
+      "scenario": "Early local proof",
+      "mau": 5000,
+      "paid_users": 100,
+      "arppu": 149,
+      "subscription_gross_mrr": 14900,
+      "notes": "2% paid conversion; illustrative only."
+    },
+    {
+      "scenario": "City traction",
+      "mau": 50000,
+      "paid_users": 1500,
+      "arppu": 199,
+      "subscription_gross_mrr": 298500,
+      "notes": "3% paid conversion; excludes business revenue, fees, taxes and refunds."
+    },
+    {
+      "scenario": "Multi-city scale",
+      "mau": 200000,
+      "paid_users": 8000,
+      "arppu": 199,
+      "subscription_gross_mrr": 1592000,
+      "notes": "4% paid conversion; illustrative, not a forecast."
+    }
+  ],
+  "crore_math": {
+    "annual_subscription_revenue_target_inr": 10000000,
+    "price_monthly_inr": 199,
+    "approx_average_paid_subscribers_required": 4185,
+    "approx_mau_at_3_percent_conversion": 139500,
+    "note": "This is gross annual recurring subscription revenue arithmetic before app-store fees, GST, refunds, churn, support, marketing and other expenses; it is not a profit estimate."
+  }
+}

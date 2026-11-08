@@ -1,0 +1,532 @@
+{
+  "schema_version": "1.0.0",
+  "project": "IRL Activity Network",
+  "screen_count": 83,
+  "navigation": {
+    "tabs": [
+      "Discover",
+      "Live",
+      "Create",
+      "Circles",
+      "Profile"
+    ],
+    "inbox": "top-level icon reachable from every main tab",
+    "expenses": "accessible from activity group and profile utility hub",
+    "quest": "discover home card + profile progress entry"
+  },
+  "screens": [
+    {
+      "id": "boot_splash",
+      "area": "Launch",
+      "purpose": "Native splash / app hydration",
+      "route": "/boot/splash"
+    },
+    {
+      "id": "service_status",
+      "area": "Launch",
+      "purpose": "Service unavailable / maintenance",
+      "route": "/service/status"
+    },
+    {
+      "id": "welcome",
+      "area": "Onboarding",
+      "purpose": "Brand promise and CTA",
+      "route": "/welcome"
+    },
+    {
+      "id": "phone_entry",
+      "area": "Onboarding",
+      "purpose": "Phone number entry",
+      "route": "/phone/entry"
+    },
+    {
+      "id": "otp_verify",
+      "area": "Onboarding",
+      "purpose": "OTP verification, resend and error states",
+      "route": "/otp/verify"
+    },
+    {
+      "id": "age_gate",
+      "area": "Onboarding",
+      "purpose": "18+ age gate and terms acknowledgement",
+      "route": "/age/gate"
+    },
+    {
+      "id": "profile_setup",
+      "area": "Onboarding",
+      "purpose": "Name, avatar, short bio",
+      "route": "/profile/setup"
+    },
+    {
+      "id": "interest_picker",
+      "area": "Onboarding",
+      "purpose": "Pick activity interests",
+      "route": "/interest/picker"
+    },
+    {
+      "id": "intent_picker",
+      "area": "Onboarding",
+      "purpose": "Choose why/when user wants to connect",
+      "route": "/intent/picker"
+    },
+    {
+      "id": "location_explainer",
+      "area": "Onboarding",
+      "purpose": "Explain approximate location use before OS permission",
+      "route": "/location/explainer"
+    },
+    {
+      "id": "location_permission",
+      "area": "Onboarding",
+      "purpose": "OS location permission states",
+      "route": "/location/permission"
+    },
+    {
+      "id": "notification_opt_in",
+      "area": "Onboarding",
+      "purpose": "Notification value explanation and opt-in",
+      "route": "/notification/opt/in"
+    },
+    {
+      "id": "safety_intro",
+      "area": "Onboarding",
+      "purpose": "Public meetups, consent, block/report and safety rules",
+      "route": "/safety/intro"
+    },
+    {
+      "id": "first_plan_prompt",
+      "area": "Onboarding",
+      "purpose": "Create first plan or browse demo content",
+      "route": "/first/plan/prompt"
+    },
+    {
+      "id": "discover_home",
+      "area": "Core",
+      "purpose": "Greeting, search, featured plan, nearby activities, category rail",
+      "route": "/discover/home"
+    },
+    {
+      "id": "discover_search",
+      "area": "Discovery",
+      "purpose": "Search people/activities/venues with typeahead",
+      "route": "/discover/search"
+    },
+    {
+      "id": "category_results",
+      "area": "Discovery",
+      "purpose": "Filtered list for one activity category",
+      "route": "/category/results"
+    },
+    {
+      "id": "map_discovery",
+      "area": "Discovery",
+      "purpose": "Map/list toggle with privacy-safe clustered plan pins",
+      "route": "/map/discovery"
+    },
+    {
+      "id": "filters_sheet",
+      "area": "Discovery",
+      "purpose": "Distance, time, age range where lawful, group size, activity level, accessibility",
+      "route": "/filters/sheet"
+    },
+    {
+      "id": "live_radar",
+      "area": "Discovery",
+      "purpose": "Live available-now intent cards and map; no precise user dots",
+      "route": "/live/radar"
+    },
+    {
+      "id": "availability_setup",
+      "area": "Discovery",
+      "purpose": "Available now / later / busy and chosen activity intents",
+      "route": "/availability/setup"
+    },
+    {
+      "id": "activity_detail",
+      "area": "Plans",
+      "purpose": "Plan details, host, venue area, audience, join requirements, safety type",
+      "route": "/activity/detail"
+    },
+    {
+      "id": "join_request",
+      "area": "Plans",
+      "purpose": "Request to join with optional short intro",
+      "route": "/join/request"
+    },
+    {
+      "id": "join_pending",
+      "area": "Plans",
+      "purpose": "Pending host approval",
+      "route": "/join/pending"
+    },
+    {
+      "id": "join_accepted",
+      "area": "Plans",
+      "purpose": "Accepted state and group access",
+      "route": "/join/accepted"
+    },
+    {
+      "id": "waitlist",
+      "area": "Plans",
+      "purpose": "Waitlist and promotion rules",
+      "route": "/waitlist"
+    },
+    {
+      "id": "create_activity_type",
+      "area": "Create",
+      "purpose": "Choose activity or custom plan",
+      "route": "/create/activity/type"
+    },
+    {
+      "id": "create_activity_time",
+      "area": "Create",
+      "purpose": "Date, start window and duration",
+      "route": "/create/activity/time"
+    },
+    {
+      "id": "create_activity_place",
+      "area": "Create",
+      "purpose": "Public venue / public area picker",
+      "route": "/create/activity/place"
+    },
+    {
+      "id": "create_activity_group",
+      "area": "Create",
+      "purpose": "Group size, access rules, audience preferences",
+      "route": "/create/activity/group"
+    },
+    {
+      "id": "create_activity_details",
+      "area": "Create",
+      "purpose": "Title, description, tags, cost expectation, accessibility notes",
+      "route": "/create/activity/details"
+    },
+    {
+      "id": "create_activity_preview",
+      "area": "Create",
+      "purpose": "Review and publish",
+      "route": "/create/activity/preview"
+    },
+    {
+      "id": "my_activities",
+      "area": "Plans",
+      "purpose": "Hosted, joined, past and cancelled plans",
+      "route": "/my/activities"
+    },
+    {
+      "id": "activity_checkin",
+      "area": "Plans",
+      "purpose": "Proximity-based optional check-in with manual fallback",
+      "route": "/activity/checkin"
+    },
+    {
+      "id": "activity_complete",
+      "area": "Plans",
+      "purpose": "Host and guest mutual completion confirmation",
+      "route": "/activity/complete"
+    },
+    {
+      "id": "post_activity_feedback",
+      "area": "Trust",
+      "purpose": "Private feedback, report, reliability event",
+      "route": "/post/activity/feedback"
+    },
+    {
+      "id": "quest_home",
+      "area": "Progress",
+      "purpose": "Daily quests, XP, streak and roadmap preview",
+      "route": "/quest/home"
+    },
+    {
+      "id": "social_roadmap",
+      "area": "Progress",
+      "purpose": "Multi-stage illustrated journey path",
+      "route": "/social/roadmap"
+    },
+    {
+      "id": "daily_challenges",
+      "area": "Progress",
+      "purpose": "Daily/weekly quests and claim states",
+      "route": "/daily/challenges"
+    },
+    {
+      "id": "streak_calendar",
+      "area": "Progress",
+      "purpose": "Activity consistency calendar, rest-day and freeze logic",
+      "route": "/streak/calendar"
+    },
+    {
+      "id": "achievements",
+      "area": "Progress",
+      "purpose": "Badges, milestones and level-up celebration",
+      "route": "/achievements"
+    },
+    {
+      "id": "achievement_detail",
+      "area": "Progress",
+      "purpose": "Badge criteria and earned evidence",
+      "route": "/achievement/detail"
+    },
+    {
+      "id": "plan_assistant",
+      "area": "Assistant",
+      "purpose": "Optional AI-assisted plan ideation and plan draft",
+      "route": "/plan/assistant"
+    },
+    {
+      "id": "assistant_result",
+      "area": "Assistant",
+      "purpose": "Suggested activity options with editable details",
+      "route": "/assistant/result"
+    },
+    {
+      "id": "circles_home",
+      "area": "Community",
+      "purpose": "Joined, suggested and local circles",
+      "route": "/circles/home"
+    },
+    {
+      "id": "circle_detail",
+      "area": "Community",
+      "purpose": "Description, rules, upcoming plans and members",
+      "route": "/circle/detail"
+    },
+    {
+      "id": "circle_create",
+      "area": "Community",
+      "purpose": "Create recurring group/community",
+      "route": "/circle/create"
+    },
+    {
+      "id": "circle_members",
+      "area": "Community",
+      "purpose": "Member list, roles and remove/report actions",
+      "route": "/circle/members"
+    },
+    {
+      "id": "circle_challenge",
+      "area": "Community",
+      "purpose": "Group challenge and shared milestone",
+      "route": "/circle/challenge"
+    },
+    {
+      "id": "inbox",
+      "area": "Messaging",
+      "purpose": "1:1 and group conversations",
+      "route": "/inbox"
+    },
+    {
+      "id": "chat_thread",
+      "area": "Messaging",
+      "purpose": "Text/media, activity context, block/report, mute",
+      "route": "/chat/thread"
+    },
+    {
+      "id": "group_chat",
+      "area": "Messaging",
+      "purpose": "Activity group chat with venue and check-in context",
+      "route": "/group/chat"
+    },
+    {
+      "id": "splitmate_home",
+      "area": "Expenses",
+      "purpose": "Expense groups and recent splits",
+      "route": "/splitmate/home"
+    },
+    {
+      "id": "split_create",
+      "area": "Expenses",
+      "purpose": "Create expense and choose participants",
+      "route": "/split/create"
+    },
+    {
+      "id": "split_bill_scan",
+      "area": "Expenses",
+      "purpose": "Camera/gallery bill capture, manual fallback",
+      "route": "/split/bill/scan"
+    },
+    {
+      "id": "split_assign_items",
+      "area": "Expenses",
+      "purpose": "Item-to-person assignment",
+      "route": "/split/assign/items"
+    },
+    {
+      "id": "split_summary",
+      "area": "Expenses",
+      "purpose": "Equal/custom/itemised split summary",
+      "route": "/split/summary"
+    },
+    {
+      "id": "split_settlement",
+      "area": "Expenses",
+      "purpose": "Track paid/pending; launch UPI app or payment provider flow; no custody by default",
+      "route": "/split/settlement"
+    },
+    {
+      "id": "profile_home",
+      "area": "Profile",
+      "purpose": "Profile, interests, reliability and achievements",
+      "route": "/profile/home"
+    },
+    {
+      "id": "profile_edit",
+      "area": "Profile",
+      "purpose": "Edit personal details, activity interests and boundaries",
+      "route": "/profile/edit"
+    },
+    {
+      "id": "privacy_controls",
+      "area": "Profile",
+      "purpose": "Location, discoverability, visibility and data controls",
+      "route": "/privacy/controls"
+    },
+    {
+      "id": "account_settings",
+      "area": "Profile",
+      "purpose": "Account, blocked users, delete account, language",
+      "route": "/account/settings"
+    },
+    {
+      "id": "safety_center",
+      "area": "Safety",
+      "purpose": "Safety toolkit, meetup checklists and trusted contact options",
+      "route": "/safety/center"
+    },
+    {
+      "id": "report_flow",
+      "area": "Safety",
+      "purpose": "Report reason, context, evidence and submit",
+      "route": "/report/flow"
+    },
+    {
+      "id": "block_confirm",
+      "area": "Safety",
+      "purpose": "Block user with consequences explained",
+      "route": "/block/confirm"
+    },
+    {
+      "id": "emergency_share",
+      "area": "Safety",
+      "purpose": "Share plan with trusted contact / emergency action guidance",
+      "route": "/emergency/share"
+    },
+    {
+      "id": "premium_compare",
+      "area": "Monetization",
+      "purpose": "Free/Plus/Pro and clear feature/price comparison",
+      "route": "/premium/compare"
+    },
+    {
+      "id": "premium_checkout",
+      "area": "Monetization",
+      "purpose": "StoreKit / Play Billing checkout",
+      "route": "/premium/checkout"
+    },
+    {
+      "id": "subscription_manage",
+      "area": "Monetization",
+      "purpose": "Restore, cancel/manage and entitlement state",
+      "route": "/subscription/manage"
+    },
+    {
+      "id": "business_discovery",
+      "area": "Business",
+      "purpose": "Partner places and sponsored plans labelled clearly",
+      "route": "/business/discovery"
+    },
+    {
+      "id": "business_profile",
+      "area": "Business",
+      "purpose": "Venue profile, offers, public location and booking links",
+      "route": "/business/profile"
+    },
+    {
+      "id": "business_onboarding",
+      "area": "Business",
+      "purpose": "Venue verification and business profile setup",
+      "route": "/business/onboarding"
+    },
+    {
+      "id": "business_campaign_create",
+      "area": "Business",
+      "purpose": "Sponsor a plan/campaign with audience, budget and duration",
+      "route": "/business/campaign/create"
+    },
+    {
+      "id": "business_analytics",
+      "area": "Business",
+      "purpose": "Impressions, joins, check-ins and attributable actions",
+      "route": "/business/analytics"
+    },
+    {
+      "id": "notifications_center",
+      "area": "System",
+      "purpose": "Activity, join, message, quest and safety notifications",
+      "route": "/notifications/center"
+    },
+    {
+      "id": "empty_states",
+      "area": "System",
+      "purpose": "No activity nearby, no chats, no circles, no quests",
+      "route": "/empty/states"
+    },
+    {
+      "id": "error_states",
+      "area": "System",
+      "purpose": "Offline, permissions denied, API failure, retry",
+      "route": "/error/states"
+    },
+    {
+      "id": "admin_dashboard",
+      "area": "Admin Web",
+      "purpose": "KPI overview and moderation queue",
+      "route": "/admin/dashboard"
+    },
+    {
+      "id": "admin_user_detail",
+      "area": "Admin Web",
+      "purpose": "User status, verification markers and audit trail",
+      "route": "/admin/user/detail"
+    },
+    {
+      "id": "admin_report_review",
+      "area": "Admin Web",
+      "purpose": "Report handling, evidence access, enforcement and appeal",
+      "route": "/admin/report/review"
+    },
+    {
+      "id": "admin_activity_review",
+      "area": "Admin Web",
+      "purpose": "Activity moderation, fraud/spam and location-risk review",
+      "route": "/admin/activity/review"
+    },
+    {
+      "id": "admin_billing",
+      "area": "Admin Web",
+      "purpose": "Subscription and campaign support; no card data",
+      "route": "/admin/billing"
+    },
+    {
+      "id": "admin_taxonomy",
+      "area": "Admin Web",
+      "purpose": "Categories, tags, city areas, quest configuration",
+      "route": "/admin/taxonomy"
+    }
+  ],
+  "global_states": [
+    "loading skeleton",
+    "empty state",
+    "offline/retry",
+    "permission denied",
+    "restricted account",
+    "account deletion pending",
+    "maintenance",
+    "reduced motion"
+  ],
+  "release_scope": {
+    "P0": "auth, onboarding, discovery, create/join, activity detail, chat, safety, privacy, basic admin",
+    "P1": "check-in, reliability, quest/streak, SplitMate ledger, push notifications, analytics",
+    "P2": "AI plan assistant, premium, business dashboard, sponsored plans, advanced roadmap and widgets"
+  }
+}

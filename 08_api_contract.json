@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.0.0",
+  "base_path": "/v1",
+  "auth": "JWT/OIDC access token; device session and refresh handled securely",
+  "groups": [
+    {
+      "resource": "auth",
+      "operations": [
+        "POST /auth/otp/request",
+        "POST /auth/otp/verify",
+        "POST /auth/session/refresh",
+        "POST /auth/logout"
+      ]
+    },
+    {
+      "resource": "profile",
+      "operations": [
+        "GET /me",
+        "PATCH /me",
+        "GET /users/{userId}/public-profile",
+        "PATCH /me/preferences",
+        "DELETE /me"
+      ]
+    },
+    {
+      "resource": "discovery",
+      "operations": [
+        "GET /activities?lat=...&lng=...&radius=...&start_after=...",
+        "GET /activities/{activityId}",
+        "GET /activities/categories",
+        "GET /availability/nearby"
+      ]
+    },
+    {
+      "resource": "activities",
+      "operations": [
+        "POST /activities",
+        "PATCH /activities/{activityId}",
+        "POST /activities/{activityId}/join-requests",
+        "POST /activities/{activityId}/join-requests/{requestId}/accept",
+        "POST /activities/{activityId}/cancel",
+        "POST /activities/{activityId}/check-ins",
+        "POST /activities/{activityId}/completion-confirmations"
+      ]
+    },
+    {
+      "resource": "messaging",
+      "operations": [
+        "GET /conversations",
+        "POST /conversations",
+        "GET /conversations/{id}/messages",
+        "POST /conversations/{id}/messages",
+        "POST /messages/{id}/report"
+      ]
+    },
+    {
+      "resource": "circles",
+      "operations": [
+        "GET /circles",
+        "POST /circles",
+        "GET /circles/{id}",
+        "POST /circles/{id}/members",
+        "POST /circles/{id}/plans"
+      ]
+    },
+    {
+      "resource": "quests",
+      "operations": [
+        "GET /quests/today",
+        "POST /quests/{id}/start",
+        "POST /quests/{id}/claim",
+        "GET /me/progress",
+        "GET /me/roadmap"
+      ]
+    },
+    {
+      "resource": "expenses",
+      "operations": [
+        "POST /expenses",
+        "POST /expenses/{id}/items",
+        "POST /expenses/{id}/participants",
+        "GET /expenses/{id}/summary",
+        "POST /expenses/{id}/settlement-intent",
+        "POST /expenses/{id}/settlement-confirmation"
+      ]
+    },
+    {
+      "resource": "monetization",
+      "operations": [
+        "GET /plans",
+        "POST /subscriptions/receipt/verify",
+        "POST /subscriptions/restore",
+        "POST /business/campaigns"
+      ]
+    },
+    {
+      "resource": "safety",
+      "operations": [
+        "POST /reports",
+        "POST /blocks",
+        "DELETE /blocks/{userId}",
+        "POST /trusted-contacts/invitations",
+        "GET /safety/case-status"
+      ]
+    }
+  ],
+  "realtime_channels": [
+    "activity:{activityId}",
+    "conversation:{conversationId}",
+    "user:{userId}:notifications"
+  ],
+  "security_rules": [
+    "Never trust client-provided XP or payment status; calculate server-side.",
+    "Use idempotency keys for join requests, expense creation and payment callbacks.",
+    "Enforce row/resource authorization on every read and write.",
+    "Return approximate location to other users; never expose exact coordinates.",
+    "Rate-limit OTP, create-plan, join-request, chat and report endpoints.",
+    "Do not store card credentials, UPI PINs or bank passwords."
+  ]
+}
