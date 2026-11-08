@@ -34,6 +34,9 @@ xcuserdata/
 8 Web Design Trends 2026 _ VistaPrint US.jpg
 docs/Project_IRL_Implementation_Pack.zip
 
+# Vercel (local project link)
+.vercel/
+
 # OS / editor
 .DS_Store
 Thumbs.db

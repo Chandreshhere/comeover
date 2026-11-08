@@ -1,0 +1,9 @@
+# Vercel only builds admin/ (project Root Directory = admin). Keep CLI uploads small.
+mobile/
+backend/
+docs/
+*.docx
+*.jpg
+*.zip
+**/node_modules/
+**/.next/
