@@ -8,6 +8,8 @@
 | [`backend/`](backend/README.md) | API, auth, realtime and jobs | Node.js + Express + MongoDB (Mongoose), WebSocket (`ws`), phone OTP via [Slide](https://slide.synquic.com), S3-compatible storage, Docker |
 | [`admin/`](admin/README.md) | Moderation and operations console | Next.js (App Router), phone OTP sign-in with server-assigned roles |
 
+**New here or picking this up on another machine? Read [`HANDOFF.md`](HANDOFF.md)** — project history, deployment facts, where secrets live, gotchas and what remains.
+
 The product spec lives in the root `0x_*.json`/`.sql`/`.csv` files, `11_Product_Research_and_Implementation_Blueprint.docx` and `prompt.md`.
 
 ## Getting started
