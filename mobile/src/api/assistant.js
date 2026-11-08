@@ -15,5 +15,5 @@ export const SUGGESTED_PROMPTS = [
 
 // Returns { reply, activityIds, activities, draft, promptsLeft }.
 export async function suggest(prompt, { coords, radiusKm } = {}) {
-  return assistant.suggest({ prompt, lat: coords?.latitude, lng: coords?.longitude, radiusKm });
+  return assistant.suggest({ prompt, lat: coords?.latitude, lng: coords?.longitude, radiusKm: radiusKm ? Math.min(25, Math.max(0.2, radiusKm)) : undefined });
 }

@@ -7,11 +7,22 @@ import { business } from '@/api/endpoints';
 import { categoryBySlug } from '@/data/catalog';
 import { itemsOf } from '@/features/premium/useRemote';
 
+// The API returns `offers` as an array of strings or { title|text, terms } objects.
+// The screens show the first one as `offer` (+ optional `offerTerms`).
+function firstOffer(v) {
+  const list = Array.isArray(v.offers) ? v.offers : [];
+  const o = list[0];
+  if (!o) return { offer: v.offer || '', offerTerms: v.offerTerms || '' };
+  if (typeof o === 'string') return { offer: o, offerTerms: v.offerTerms || '' };
+  return { offer: o.title || o.text || o.name || v.offer || '', offerTerms: o.terms || o.conditions || v.offerTerms || '' };
+}
+
 export function normaliseVenue(v) {
   if (!v) return null;
   const categories = Array.isArray(v.categories) ? v.categories : v.category ? [v.category] : [];
   return {
     ...v,
+    ...firstOffer(v),
     categories,
     pictogram: v.pictogram || categoryBySlug[categories[0]]?.pictogram || 'pin',
     accentIndex: v.accentIndex ?? 0,
@@ -31,13 +42,11 @@ export async function fetchVenue(id) {
   return normaliseVenue(await business.venue(id));
 }
 
-// The caller's own venue. There is no dedicated endpoint yet; GET
-// /business/analytics (no venueId) returns `venue` for the signed-in owner,
-// or 404 / code 'no_venue' when they haven't onboarded.
+// The caller's own venue: GET /business/venues/me. 404 / code 'no_venue' when
+// they haven't onboarded.
 export async function fetchMyVenue() {
   try {
-    const res = await business.analytics({ range: '7d' });
-    return res?.venue ? normaliseVenue(res.venue) : null;
+    return normaliseVenue(await business.myVenue());
   } catch (e) {
     if (e?.status === 404 || e?.code === 'no_venue' || e?.code === 'not_found') return null;
     throw e;

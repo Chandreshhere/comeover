@@ -60,7 +60,34 @@ Health: `GET /healthz` (process) and `GET /readyz` (MongoDB + realtime mode). Lo
 | `npm run smoke` | Boots the real server against in-memory MongoDB with Slide mocked, then checks health, OTP sign-in, refresh rotation and the WebSocket |
 | `npm run check` | Every mounted route is documented in `docs/API.md`; reports routes still to port (`--strict` fails on them) |
 | `npm run seed` | Idempotent taxonomy upserts |
+| `npm run seed:demo` / `npm run seed:demo:reset` | Load / remove demo data for testing (see "Demo data") |
 | `npm run grant-role -- <phone> <admin\|moderator\|none>` | Admin console roles |
+
+## Demo data
+
+Realistic test data so the mobile app and the admin console have something to show before real users exist. It is idempotent, and it can be removed again.
+
+Put the phone of the account that should get the completed demo profile in your **private** `.env` first (never commit it): `SEED_TEST_PHONE=98xxxxxxxx` (it falls back to `TEST_LOGIN_PHONE`). The account is found by phone and keeps its own id and roles.
+
+```bash
+node --env-file=.env scripts/seed-demo.js                          # load (re-run any time to refresh the dates)
+node --env-file=.env scripts/seed-demo.js --test-user-owns-venue   # also give the test account a verified venue
+node --env-file=.env scripts/seed-demo.js --reset                  # remove all demo data
+```
+
+The same commands exist as `npm run seed:demo` and `npm run seed:demo:reset` (pass `-- --test-user-owns-venue` to the first). The script prints the database host (never the credentials) before it writes anything. It loads the taxonomy (categories, levels, quests, badges, city areas) only if it is missing and never overwrites edits made in the admin console.
+
+**What you get** (about 665 documents; every date is relative to the moment you run it):
+
+- **People:** 14 demo users with fake `+91000000000x` numbers. These are not valid Indian mobile numbers, so no SMS can ever reach anyone. One is *limited* and one is *suspended*, for the admin console.
+- **Plans (34):** live now, tonight, tomorrow and the weekend; one full with a waitlist, one sponsored (campaign + partner venue), one circle-only, one invite-only, three flagged for review, one cancelled, and 17 completed or cancelled plans spread over the last 30 days so the admin charts look real.
+- **The test account (`SEED_TEST_PHONE`):** its profile is completed and onboarding marked done. It hosts one plan with two pending requests, is accepted into two plans (one starts within the 30-minute check-in window), has one request pending, is waitlisted in one, and has three completed plans. Roles and id are never changed.
+- **Around it:** 7 chats with unread messages (including one direct chat), 5 circles with a challenge (the test account owns one), 3 SplitMate expenses covering every payment state, 8 notifications, XP / level 4 / a 3-week streak, a quest ready to claim and 3 badges.
+- **Admin console:** 10 reports (urgent to low) with actions and 2 open appeals, 3 plans in the review queue, ~30 audit events, 5 paid subscriptions, 4 verified partner venues, 3 campaigns with 14 days of metrics and invoices.
+
+**Ids.** Demo documents have deterministic ids that look like `de30de30-xxxx-8xxx-…` ("de30" is "demo" in hex). They are valid UUIDs because the API validates ids in request bodies as UUIDs (blocking, reporting, SplitMate, direct chat). Version-8 UUIDs never occur among the random version-4 ids the app generates, so `--reset` can only ever match demo data.
+
+**Reset** deletes every document with a demo id in every collection, plus rows created *by using the app on demo content* (for example a join request you made on a demo plan). It never touches real users, real plans, the taxonomy or the auth sessions. For the test account it zeroes the progress (XP, quests, badges, availability) and keeps the profile and admin role.
 
 ## Security rules carried over
 

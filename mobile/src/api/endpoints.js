@@ -125,6 +125,7 @@ export const monetization = {
 export const business = {
   venues: (params) => api.get('/venues', params),
   venue: (id) => api.get(`/venues/${enc(id)}`),
+  myVenue: () => api.get('/business/venues/me'),
   onboard: (body) => api.post('/business/venues', body),
   campaigns: () => api.get('/business/campaigns'),
   createCampaign: (body) => api.post('/business/campaigns', body),

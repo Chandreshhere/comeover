@@ -22,6 +22,8 @@ import realtime from '@/services/realtime';
 import { getCoarsePosition } from '@/services/location';
 
 const nowIso = () => new Date().toISOString();
+// The API takes discovery radius in kilometres and rejects values outside 0.2–25.
+const clampRadiusKm = (km) => Math.min(25, Math.max(0.2, Number(km) || 3));
 const tempId = (p) => `${p}_tmp_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const itemsOf = (r) => (Array.isArray(r) ? r : r?.items || []);
 
@@ -468,7 +470,7 @@ export const useAppStore = create(
               const params = {
                 lat: coords.latitude,
                 lng: coords.longitude,
-                radius: (radiusKm || f.distanceKm || get().prefs.radiusKm) * 1000,
+                radius: clampRadiusKm(radiusKm || f.distanceKm || get().prefs.radiusKm), // API: kilometres, 0.2–25
                 category: cats?.length ? cats : undefined,
                 when: f.when !== 'any' ? f.when : undefined,
                 groupSize: f.groupSize !== 'any' ? f.groupSize : undefined,
@@ -510,7 +512,7 @@ export const useAppStore = create(
         loadNearbyPeople: () =>
           run('nearbyPeople', async () => {
             const c = await discoveryCoords();
-            const items = itemsOf(await E.discovery.nearbyPeople({ lat: c.latitude, lng: c.longitude, radius: get().prefs.radiusKm * 1000 }));
+            const items = itemsOf(await E.discovery.nearbyPeople({ lat: c.latitude, lng: c.longitude, radius: clampRadiusKm(get().prefs.radiusKm) })); // km
             set((s) => ({ users: mergeUsers(s.users, items), nearbyPeopleIds: items.map((u) => u.id) }));
             return items;
           }),
@@ -766,8 +768,9 @@ export const useAppStore = create(
           }),
         loadCircleChallenge: (id) =>
           run(`circleChallenge:${id}`, async () => {
-            const ch = await E.circles.challenge(id);
-            set((s) => ({ circleChallenges: { ...s.circleChallenges, [id]: ch } }));
+            const r = await E.circles.challenge(id);
+            const ch = r && Object.prototype.hasOwnProperty.call(r, 'challenge') ? r.challenge : r; // API: { challenge: Challenge | null }
+            set((s) => ({ circleChallenges: { ...s.circleChallenges, [id]: ch || null } }));
             return ch;
           }),
         joinCircle: async (circleId) => {
@@ -797,8 +800,9 @@ export const useAppStore = create(
           }));
         },
         joinCircleChallenge: async (circleId) => {
-          const ch = await E.circles.joinChallenge(circleId);
-          set((s) => ({ circleChallenges: { ...s.circleChallenges, [circleId]: ch?.id ? ch : { ...(s.circleChallenges[circleId] || {}), joined: true, joinedAt: nowIso() } } }));
+          const r = await E.circles.joinChallenge(circleId);
+          const ch = r && r.challenge ? r.challenge : r?.id ? r : null; // API: { challenge }
+          set((s) => ({ circleChallenges: { ...s.circleChallenges, [circleId]: ch || { ...(s.circleChallenges[circleId] || {}), joined: true, joinedAt: nowIso() } } }));
         },
 
         // ---------- safety (never paywalled) ----------
