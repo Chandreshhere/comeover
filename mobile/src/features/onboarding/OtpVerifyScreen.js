@@ -10,12 +10,16 @@ import haptics from '@/utils/haptics';
 import OnboardingFrame from './components/OnboardingFrame';
 import { otpErrorMessage } from './authErrors';
 
-const LEN = 6;
+const DEFAULT_LEN = 6; // the server reports the real length (Slide widget setting) as codeLength
+const MIN_LEN = 4;
+const MAX_LEN = 8;
 const RESEND_SEC = 30;
 
 export default function OtpVerifyScreen() {
   const nav = useNavigation();
   const route = useRoute();
+  const rawLen = Number(route.params?.codeLength);
+  const LEN = Number.isFinite(rawLen) && rawLen >= MIN_LEN && rawLen <= MAX_LEN ? rawLen : DEFAULT_LEN;
   const phone = useAppStore((s) => s.session.phone);
   const verifyOtp = useAppStore((s) => s.verifyOtp);
   const resendOtp = useAppStore((s) => s.resendOtp);
@@ -41,7 +45,7 @@ export default function OtpVerifyScreen() {
   }, [seconds]);
 
   const verify = async (value) => {
-    if (value.length !== LEN || loading || locked) return;
+    if (value.length < MIN_LEN || loading || locked) return;
     setLoading(true);
     setError(null);
     try {
@@ -94,7 +98,7 @@ export default function OtpVerifyScreen() {
       keyboard
       title="Enter the code"
       subtitle={`Sent${via} to ${masked}.`}
-      footer={<Button title="Verify" onPress={() => verify(code)} loading={loading} disabled={code.length !== LEN || locked} />}
+      footer={<Button title="Verify" onPress={() => verify(code)} loading={loading} disabled={code.length < MIN_LEN || locked} />}
     >
       <Pressable onPress={() => inputRef.current?.focus()} accessibilityRole="none" accessibilityLabel="One-time code input">
         <Animated.View style={[{ flexDirection: 'row', justifyContent: 'space-between' }, shakeStyle]}>
@@ -135,7 +139,7 @@ export default function OtpVerifyScreen() {
           textContentType="oneTimeCode"
           autoComplete="sms-otp"
           maxLength={LEN}
-          accessibilityLabel="Enter the 6-digit code"
+          accessibilityLabel={`Enter the ${LEN}-digit code`}
           caretHidden
           style={{ position: 'absolute', width: '100%', height: 60, opacity: 0.01, fontFamily: fonts.regular }}
         />

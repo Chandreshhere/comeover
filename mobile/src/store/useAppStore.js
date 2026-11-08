@@ -369,7 +369,7 @@ export const useAppStore = create(
           const r = await Auth.requestOtp(phone);
           otp = { phone, requestId: r.requestId, channel: r.channel };
           set((s) => ({ session: { ...s.session, phone } }));
-          return { sent: true, channel: r.channel, retryAfterSec: r.retryAfterSec ?? 30, maskedPhone: r.maskedPhone };
+          return { sent: true, channel: r.channel, retryAfterSec: r.retryAfterSec ?? 30, maskedPhone: r.maskedPhone, codeLength: r.codeLength };
         },
         // channel: 'sms' | 'whatsapp' to switch delivery; otherwise the widget default.
         resendOtp: async (channel) => {

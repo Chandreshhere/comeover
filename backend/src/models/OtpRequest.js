@@ -8,7 +8,8 @@ const OtpRequestSchema = new Schema(
     _id: { type: String, required: true }, // Slide requestId
     phone: { type: String, required: true },
     ip: { type: String, default: null },
-    channel: { type: String, default: null }, // 'sms' | 'whatsapp'
+    channel: { type: String, default: null }, // 'sms' | 'whatsapp' | 'test'
+    provider: { type: String, default: 'slide' }, // 'slide' | 'test' (fixed-code test login, see lib/testLogin.js)
     attempts: { type: Number, default: 0 },
     resendCount: { type: Number, default: 0 },
     lastSentAt: { type: Date, default: Date.now },

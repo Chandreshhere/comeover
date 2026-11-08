@@ -1,7 +1,8 @@
 // Build-time public configuration. Next.js inlines NEXT_PUBLIC_* values, so each
 // variable must be referenced literally here.
 export const config = {
-  apiUrl: (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/+$/, ''),
+  // Strip a stray BOM / whitespace (e.g. from a piped `vercel env add`) and trailing slashes.
+  apiUrl: (process.env.NEXT_PUBLIC_API_URL || '').replace(/^[﻿\s]+|\s+$/g, '').replace(/\/+$/, ''),
 };
 
 export const ENV_VARS = [

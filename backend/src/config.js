@@ -39,6 +39,17 @@ const config = {
     otpTtlSec: int(env.OTP_TTL_SEC, 600),
     resendAfterSec: int(env.OTP_RESEND_AFTER_SEC, 30),
     maxVerifyAttempts: int(env.OTP_MAX_ATTEMPTS, 5),
+    codeLength: int(env.SLIDE_OTP_CODE_LENGTH, 6), // must match the Slide OTP widget; sent to clients for the code boxes
+  },
+
+  // TEMPORARY fixed-code sign-in for ONE phone number (for testing before Slide is set up).
+  // Off unless both phone and code are set. In production it is ignored unless
+  // TEST_LOGIN_ALLOW_PRODUCTION=true AND TEST_LOGIN_EXPIRES_AT (ISO date) is in the future.
+  testLogin: {
+    phone: env.TEST_LOGIN_PHONE || '',
+    code: env.TEST_LOGIN_CODE || '',
+    expiresAt: env.TEST_LOGIN_EXPIRES_AT || '',
+    allowProduction: bool(env.TEST_LOGIN_ALLOW_PRODUCTION),
   },
 
   s3: {

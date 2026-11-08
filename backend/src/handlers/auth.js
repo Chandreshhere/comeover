@@ -18,6 +18,8 @@ const slide = require('../lib/slide');
 const { normalizePhone, maskPhone } = require('../lib/phone');
 const { enforce } = require('../lib/rateLimit');
 const tokens = require('../lib/tokens');
+const testLogin = require('../lib/testLogin');
+const crypto = require('crypto');
 const { requireUser, requireAdmin } = require('../lib/auth');
 const { audit } = require('../lib/audit');
 
@@ -66,10 +68,25 @@ async function findOrCreateUser(phone) {
 
 const routes = {
   'POST /v1/auth/otp/request': async (req) => {
-    assertConfigured();
     const phone = normalizePhone(req.body.phone);
+    const isTest = testLogin.matchesPhone(phone); // temporary fixed-code login (see lib/testLogin.js)
+    if (!isTest) assertConfigured();
     await enforce('otp_send_ip', ipOf(req), 1, { code: 'rate_limited' });
     await enforce('otp_send_phone', phone, 1, { code: 'otp_rate_limited', message: 'Too many codes requested. Please wait and try again.' });
+    if (isTest) {
+      const { OtpRequest } = require('../models');
+      const requestId = `otpreq_test_${crypto.randomBytes(9).toString('hex')}`;
+      await OtpRequest.create({
+        _id: requestId,
+        phone,
+        ip: req.ip || null,
+        channel: 'test',
+        provider: 'test',
+        lastSentAt: new Date(),
+        expiresAt: new Date(Date.now() + config.slide.otpTtlSec * 1000),
+      });
+      return { requestId, channel: 'test', retryAfterSec: config.slide.resendAfterSec, maskedPhone: maskPhone(phone), codeLength: testLogin.codeLength() };
+    }
     let sent;
     try {
       sent = await slide.sendOtp(phone);
@@ -85,21 +102,27 @@ const routes = {
       lastSentAt: new Date(),
       expiresAt: new Date(Date.now() + config.slide.otpTtlSec * 1000),
     });
-    return { requestId: sent.requestId, channel: sent.channel, retryAfterSec: config.slide.resendAfterSec, maskedPhone: maskPhone(phone) };
+    return { requestId: sent.requestId, channel: sent.channel, retryAfterSec: config.slide.resendAfterSec, maskedPhone: maskPhone(phone), codeLength: config.slide.codeLength };
   },
 
   'POST /v1/auth/otp/resend': async (req) => {
-    assertConfigured();
     const requestId = String(req.body.requestId || '');
     const channel = req.body.channel;
     const { OtpRequest } = require('../models');
     const otp = await OtpRequest.findById(requestId).lean();
     if (!otp || otp.verifiedAt || otp.expiresAt < new Date()) throw err.badRequest('otp_expired', 'That code has expired. Request a new one.');
+    const isTest = otp.provider === 'test';
+    if (!isTest) assertConfigured();
     const waited = (Date.now() - new Date(otp.lastSentAt).getTime()) / 1000;
     if (waited < config.slide.resendAfterSec) {
       throw err.tooMany(Math.ceil(config.slide.resendAfterSec - waited), 'otp_rate_limited', 'Please wait before requesting another code.');
     }
     await enforce('otp_resend_phone', otp.phone, 1, { code: 'otp_rate_limited', message: 'Too many codes requested. Please wait and try again.' });
+    if (isTest) {
+      if (!testLogin.isActive()) throw err.badRequest('otp_expired', 'That code has expired. Request a new one.');
+      await OtpRequest.updateOne({ _id: requestId }, { $set: { lastSentAt: new Date() }, $inc: { resendCount: 1 } });
+      return { requestId, channel: 'test', retryAfterSec: config.slide.resendAfterSec };
+    }
     let r;
     try {
       r = await slide.retryOtp(requestId, channel);
@@ -111,7 +134,6 @@ const routes = {
   },
 
   'POST /v1/auth/otp/verify': async (req) => {
-    assertConfigured();
     const requestId = String(req.body.requestId || '');
     const code = String(req.body.code || '').trim();
     if (!requestId) throw err.badRequest('otp_expired', 'That code has expired. Request a new one.');
@@ -122,36 +144,48 @@ const routes = {
     const max = config.slide.maxVerifyAttempts;
     const existing = await OtpRequest.findById(requestId).lean();
     if (!existing || existing.verifiedAt || existing.expiresAt < new Date()) throw err.badRequest('otp_expired', 'That code has expired. Request a new one.');
+    const isTest = existing.provider === 'test';
+    if (!isTest) assertConfigured();
     if (existing.attempts >= max) throw err.badRequest('otp_locked', 'Too many wrong codes. Request a new one.');
     const otp = await OtpRequest.findOneAndUpdate({ _id: requestId, verifiedAt: null, attempts: { $lt: max } }, { $inc: { attempts: 1 } }, { new: true }).lean();
     if (!otp) throw err.badRequest('otp_locked', 'Too many wrong codes. Request a new one.');
 
-    let slideToken;
-    try {
-      slideToken = (await slide.verifyOtp(requestId, code)).accessToken;
-    } catch (e) {
-      if (e instanceof slide.SlideError && e.kind === 'invalid') {
+    if (isTest) {
+      // Fixed-code test login (lib/testLogin.js): same attempt limits as real codes.
+      if (!testLogin.isActive() || !testLogin.matchesPhone(otp.phone)) throw err.badRequest('otp_expired', 'That code has expired. Request a new one.');
+      if (!testLogin.checkCode(code)) {
         if (otp.attempts >= max) throw err.badRequest('otp_locked', 'Too many wrong codes. Request a new one.');
         throw err.badRequest('otp_invalid', "That code didn't match. Check the message and try again.", { attemptsLeft: max - otp.attempts });
       }
-      throw mapSlideError(e, { phase: 'verify' });
-    }
-    let confirmed;
-    try {
-      confirmed = await slide.verifyToken(slideToken);
-    } catch (e) {
-      throw mapSlideError(e, { phase: 'verify' });
-    }
-    if (!confirmed.verified || confirmed.identifier !== otp.phone) {
-      logger.warn({ msg: 'slide_identifier_mismatch', requestId });
-      throw err.badRequest('otp_invalid', "That code didn't match. Check the message and try again.");
+    } else {
+      let slideToken;
+      try {
+        slideToken = (await slide.verifyOtp(requestId, code)).accessToken;
+      } catch (e) {
+        if (e instanceof slide.SlideError && e.kind === 'invalid') {
+          if (otp.attempts >= max) throw err.badRequest('otp_locked', 'Too many wrong codes. Request a new one.');
+          throw err.badRequest('otp_invalid', "That code didn't match. Check the message and try again.", { attemptsLeft: max - otp.attempts });
+        }
+        throw mapSlideError(e, { phase: 'verify' });
+      }
+      let confirmed;
+      try {
+        confirmed = await slide.verifyToken(slideToken);
+      } catch (e) {
+        throw mapSlideError(e, { phase: 'verify' });
+      }
+      if (!confirmed.verified || confirmed.identifier !== otp.phone) {
+        logger.warn({ msg: 'slide_identifier_mismatch', requestId });
+        throw err.badRequest('otp_invalid', "That code didn't match. Check the message and try again.");
+      }
     }
     await OtpRequest.updateOne({ _id: requestId }, { $set: { verifiedAt: new Date() } });
 
     const { user, created } = await findOrCreateUser(otp.phone);
     if (user.status === 'deleted') throw err.forbidden('account_deleted', 'This account is pending deletion. Contact support to restore it.');
     const t = await tokens.issueTokens(user, { ip: req.ip, userAgent: req.headers['user-agent'] });
-    await audit({ actorUserId: user._id, action: created ? 'auth.sign_up' : 'auth.sign_in', targetType: 'user', targetId: user._id, ip: req.ip, metadata: { channel: otp.channel } }).catch(() => {});
+    const action = isTest ? 'auth.test_login' : created ? 'auth.sign_up' : 'auth.sign_in';
+    await audit({ actorUserId: user._id, action, targetType: 'user', targetId: user._id, ip: req.ip, metadata: { channel: otp.channel, testLogin: isTest } }).catch(() => {});
     return { ...t, isNewUser: !(user.profile && user.profile.displayName), user: { id: user._id, roles: user.roles || [] } };
   },
 

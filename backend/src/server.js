@@ -11,6 +11,7 @@ async function start({ port = config.port } = {}) {
   if (!config.jwt.secret || config.jwt.secret.length < 32) {
     logger.warn({ msg: 'jwt_secret_missing', hint: 'Set JWT_SECRET (≥32 chars); auth endpoints return 503 until then.' });
   }
+  require('./lib/testLogin').logStatus(logger);
   await db.connect();
   const { createApp } = require('./app');
   const app = createApp();
