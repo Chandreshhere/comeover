@@ -238,7 +238,10 @@ async function findActivities(viewerId, { point, radiusKm, category, when, q, li
   const { Activity, Category, User } = models();
   const scope = await viewerScope(viewerId, { session });
   const and = [visibleFilter(scope), { status: { $in: ['open', 'full', 'in_progress'] } }, { endsAt: { $gt: new Date() } }];
-  if (category) and.push({ category: String(category) });
+  // `category` is one slug or a list (the app's multi-select sends "chai,run").
+  const cats = (Array.isArray(category) ? category : String(category || '').split(',')).map((s) => String(s).trim()).filter(Boolean);
+  if (cats.length === 1) and.push({ category: cats[0] });
+  else if (cats.length > 1) and.push({ category: { $in: cats } });
   const w = whenFilter(when);
   if (w) and.push(w);
   if (q) {

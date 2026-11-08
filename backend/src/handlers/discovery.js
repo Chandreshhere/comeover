@@ -79,7 +79,8 @@ const routes = {
     const q = check(
       {
         radius: { type: 'number', min: 0.2, max: geo.MAX_RADIUS_KM },
-        category: { type: 'string', format: 'slug' },
+        // one slug, or a comma-separated list (up to 10), e.g. "chai,run"
+        category: { type: 'string', max: 400, pattern: /^[a-z0-9][a-z0-9_-]{1,39}(,[a-z0-9][a-z0-9_-]{1,39}){0,9}$/ },
         when: { type: 'string', enum: A.WHEN, default: 'any' },
         q: { type: 'string', max: 80 },
       },

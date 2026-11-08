@@ -231,3 +231,27 @@ test('GET /me/activities tabs, search and venues', async (t) => {
   const detail = await call('discovery', 'GET /v1/venues/{venueId}', { user: guest, params: { venueId: v._id } });
   assert.deepEqual(detail.body.upcomingPlans.map((a) => a.id), [plan.id], 'plans within 75 m of the venue');
 });
+
+test('GET /activities: category accepts one slug or a comma list; radius is in km (0.2-25)', async (t) => {
+  if (skip) return t.skip(skip);
+  await seed();
+  const host = await makeUser('Host');
+  const viewer = await makeUser('Viewer');
+  await createPlan(host, { title: 'Chai plan' });
+  await createPlan(host, { title: 'Run plan', category: 'run', startsAt: new Date(Date.now() + 3 * 3600000).toISOString() });
+  const q = (extra) => call('discovery', 'GET /v1/activities', { user: viewer, query: { lat: String(AHMEDABAD.lat), lng: String(AHMEDABAD.lng), radius: '15', ...extra } });
+  const titles = (r) => r.body.items.map((a) => a.title).sort();
+
+  assert.deepEqual(titles(await q({})), ['Chai plan', 'Run plan']);
+  assert.deepEqual(titles(await q({ category: 'chai' })), ['Chai plan']);
+  assert.deepEqual(titles(await q({ category: 'chai,run' })), ['Chai plan', 'Run plan']); // the app's multi-select
+  assert.deepEqual(titles(await q({ category: 'run,nightlife' })), ['Run plan']); // unknown slugs just match nothing
+
+  const bad = await q({ category: 'chai,,run;drop' });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.code, 'validation_failed');
+  const metres = await q({ radius: '15000' }); // the old app bug: metres instead of km
+  assert.equal(metres.status, 400);
+  const tooMany = await q({ category: Array.from({ length: 11 }, (_, i) => `cat${i}`).join(',') });
+  assert.equal(tooMany.status, 400);
+});
