@@ -1,8 +1,9 @@
 'use strict';
 // Razorpay — ONLY for Venue/Club plan invoices (B2B). No wallet, no stored
 // balances, no customer-fund custody, no splitting of merchant proceeds.
-// Credentials: RAZORPAY_KEY_ID + RAZORPAY_SECRET_ARN (JSON {key_secret, webhook_secret}). TODO(credentials).
+// Credentials: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET.
 const crypto = require('crypto');
+const config = require('../../config');
 
 function hmacHex(secret, payload) {
   return crypto.createHmac('sha256', secret).update(payload).digest('hex');
@@ -15,35 +16,25 @@ function safeEqualHex(a, b) {
   return crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
 }
 
-// X-Razorpay-Signature over the raw webhook body.
-function verifyWebhookSignature(rawBody, signature, webhookSecret) {
+// X-Razorpay-Signature over the raw webhook body (use req.rawBody()).
+function verifyWebhookSignature(rawBody, signature, webhookSecret = config.razorpay.webhookSecret) {
   if (!webhookSecret || !signature) return false;
   return safeEqualHex(hmacHex(webhookSecret, rawBody), String(signature));
 }
 
 // Checkout handler signature: HMAC(order_id + "|" + payment_id, key_secret).
-function verifyPaymentSignature(orderId, paymentId, signature, keySecret) {
+function verifyPaymentSignature(orderId, paymentId, signature, keySecret = config.razorpay.keySecret) {
   if (!keySecret || !orderId || !paymentId || !signature) return false;
   return safeEqualHex(hmacHex(keySecret, `${orderId}|${paymentId}`), String(signature));
 }
 
-let secretsPromise;
 async function secrets() {
-  if (!secretsPromise) {
-    secretsPromise = (async () => {
-      if (process.env.RAZORPAY_SECRET_ARN) {
-        const { getSecretJson } = require('../aws');
-        return getSecretJson(process.env.RAZORPAY_SECRET_ARN);
-      }
-      return { key_secret: process.env.RAZORPAY_KEY_SECRET || null, webhook_secret: process.env.RAZORPAY_WEBHOOK_SECRET || null };
-    })();
-  }
-  return secretsPromise;
+  return { key_secret: config.razorpay.keySecret || null, webhook_secret: config.razorpay.webhookSecret || null };
 }
 
 async function createOrder({ amountMinor, currency = 'INR', receipt, notes }) {
-  const keyId = process.env.RAZORPAY_KEY_ID;
-  const { key_secret: keySecret } = await secrets();
+  const keyId = config.razorpay.keyId;
+  const keySecret = config.razorpay.keySecret;
   if (!keyId || !keySecret) {
     const e = new Error('Razorpay is not configured');
     e.code = 'payments_not_configured';

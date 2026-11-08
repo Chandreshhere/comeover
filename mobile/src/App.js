@@ -25,7 +25,7 @@ export default function App() {
     return useAppStore.persist.onFinishHydration(() => setHydrated(true));
   }, [hydrated]);
 
-  // Restore the Cognito session and load /me/bootstrap before routing.
+  // Restore the signed-in session (Keychain) and load /me/bootstrap before routing.
   useEffect(() => {
     if (hydrated) initSession();
   }, [hydrated, initSession]);

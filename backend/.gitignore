@@ -1,6 +1,6 @@
 node_modules/
-.aws-sam/
 .env
-env.json
-samconfig.toml
+.env.*
+!.env.example
 coverage/
+*.log

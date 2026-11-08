@@ -13,7 +13,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { mapIncoming, setSelfId } from '@/api/client';
 import * as E from '@/api/endpoints';
-import { startPhoneSignIn, answerOtp } from '@/api/cognito';
+import * as Auth from '@/api/auth';
 import { clearSession, hasSession, loadSession, onSignedOut, saveSession } from '@/api/session';
 import { suggest } from '@/api/assistant';
 import config, { isConfigured } from '@/config';
@@ -227,7 +227,7 @@ function debounced(fn, ms = 600) {
 const pushProfile = debounced((body) => E.me.update(body));
 const pushPrefs = debounced((body) => E.me.updatePreferences(body));
 
-let otp = { phone: null, session: null };
+let otp = { phone: null, requestId: null, channel: null };
 
 export const useAppStore = create(
   persist(
@@ -364,30 +364,26 @@ export const useAppStore = create(
           set((s) => ({ prefs: { ...s.prefs, notifications: { ...s.prefs.notifications, enabled: r.enabled } } }));
           return r;
         },
+        // Slide OTP via the API. Codes go out on WhatsApp or SMS (per the Slide widget).
         requestOtp: async (phone) => {
-          try {
-            const r = await startPhoneSignIn(phone);
-            otp = { phone, session: r.session };
-            set((s) => ({ session: { ...s.session, phone } }));
-            return { sent: true, retryAfterSec: 30 };
-          } catch (e) {
-            if (['TooManyRequestsException', 'LimitExceededException'].includes(e.code)) e.code = 'otp_rate_limited';
-            throw e;
-          }
+          const r = await Auth.requestOtp(phone);
+          otp = { phone, requestId: r.requestId, channel: r.channel };
+          set((s) => ({ session: { ...s.session, phone } }));
+          return { sent: true, channel: r.channel, retryAfterSec: r.retryAfterSec ?? 30, maskedPhone: r.maskedPhone };
+        },
+        // channel: 'sms' | 'whatsapp' to switch delivery; otherwise the widget default.
+        resendOtp: async (channel) => {
+          if (!otp.requestId) return get().requestOtp(otp.phone);
+          const r = await Auth.resendOtp(otp.requestId, channel);
+          otp = { ...otp, requestId: r.requestId || otp.requestId, channel: r.channel };
+          return { sent: true, channel: r.channel, retryAfterSec: r.retryAfterSec ?? 30, notice: r.notice };
         },
         verifyOtp: async (code) => {
-          try {
-            const tokens = await answerOtp(otp.phone, otp.session, code);
-            await saveSession(tokens);
-          } catch (e) {
-            if (e.session) otp.session = e.session;
-            if (e.code === 'CodeMismatchException') e.code = 'otp_invalid';
-            else if (['NotAuthorizedException', 'TooManyFailedAttemptsException'].includes(e.code)) e.code = 'otp_locked';
-            throw e;
-          }
-          otp = { phone: otp.phone, session: null };
+          const r = await Auth.verifyOtp(otp.requestId, code);
+          await saveSession(r.tokens);
+          otp = { phone: otp.phone, requestId: null, channel: null };
           await get().bootstrap();
-          return { isNewUser: !get().session.onboarded };
+          return { isNewUser: r.isNewUser || !get().session.onboarded };
         },
         confirmAge: async () => {
           await E.me.update({ ageConfirmed: true, termsAccepted: true });

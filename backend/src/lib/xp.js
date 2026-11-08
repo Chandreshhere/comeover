@@ -5,7 +5,10 @@
 //   - new category explored after completion
 //   - hosted plan completed without cancellation abuse
 //   - claiming a server-evaluated quest
-// Every award is de-duplicated by idempotency_key and limited by a daily cap.
+// Every award is de-duplicated by idempotencyKey and limited by a daily cap.
+//
+//   const r = await awardXp(session, { userId, eventType: 'activity_completed', refId: activityId, activityId });
+//   // r = { xp, reason, capped, key, leveledUp?, level? }
 
 const DAILY_CAP = 200;
 
@@ -13,7 +16,7 @@ const XP_RULES = {
   activity_completed: 40,
   new_category_explored: 20,
   hosted_completed: 60,
-  quest_claimed: null, // amount comes from the quest's xp_reward
+  quest_claimed: null, // amount comes from the quest's xpReward
   circle_challenge_completed: null,
 };
 
@@ -45,50 +48,56 @@ function istDay(date = new Date()) {
   return new Date(date.getTime() + 330 * 60000).toISOString().slice(0, 10);
 }
 
+// levels: [{ level, name, xpThreshold }] (legacy snake_case xp_threshold also accepted)
 function levelForXp(xp, levels) {
-  const sorted = [...levels].sort((a, b) => a.xp_threshold - b.xp_threshold);
+  const t = (l) => (l.xpThreshold != null ? l.xpThreshold : l.xp_threshold);
+  const sorted = [...levels].sort((a, b) => t(a) - t(b));
   let cur = sorted[0];
-  for (const l of sorted) if (xp >= l.xp_threshold) cur = l;
-  const next = sorted.find((l) => l.xp_threshold > cur.xp_threshold) || null;
+  for (const l of sorted) if (xp >= t(l)) cur = l;
+  const next = sorted.find((l) => t(l) > t(cur)) || null;
   return {
     level: cur.level,
     name: cur.name,
     xp,
-    next: next ? { level: next.level, name: next.name, xpThreshold: next.xp_threshold } : null,
-    ratio: next ? (xp - cur.xp_threshold) / (next.xp_threshold - cur.xp_threshold) : 1,
+    next: next ? { level: next.level, name: next.name, xpThreshold: t(next) } : null,
+    ratio: next ? (xp - t(cur)) / (t(next) - t(cur)) : 1,
   };
 }
 
-// Transactional award. `client` must be inside a transaction.
-async function awardXp(client, { userId, eventType, refId, activityId = null, base }) {
+// Award inside a transaction (pass the session from db.withTransaction).
+async function awardXp(session, { userId, eventType, refId, activityId = null, base }) {
+  const { XpDailyTotal, XpEvent, User, Level } = require('../models');
   const key = xpIdempotencyKey(eventType, userId, refId);
   const day = istDay();
-  await client.query('INSERT INTO xp_daily_totals (user_id, day, total) VALUES ($1, $2, 0) ON CONFLICT DO NOTHING', [userId, day]);
-  const { rows: totals } = await client.query('SELECT total FROM xp_daily_totals WHERE user_id = $1 AND day = $2 FOR UPDATE', [userId, day]);
-  const { rowCount: dup } = await client.query('SELECT 1 FROM xp_events WHERE idempotency_key = $1', [key]);
-  const decision = computeAward({ eventType, base, todayTotal: totals[0] ? totals[0].total : 0, alreadyAwarded: dup > 0 });
+  const opts = session ? { session } : {};
+  const totals = await XpDailyTotal.findOneAndUpdate({ userId, day }, { $setOnInsert: { total: 0 } }, { upsert: true, new: true, ...opts }).lean();
+  const dup = await XpEvent.exists({ idempotencyKey: key }).session(session || null);
+  const decision = computeAward({ eventType, base, todayTotal: totals ? totals.total : 0, alreadyAwarded: !!dup });
   if (decision.reason === 'duplicate' || decision.reason === 'non_qualifying' || decision.reason === 'invalid_amount') return { ...decision, key };
 
   // Record even capped (0 XP) events so they can never be re-awarded later.
-  const ins = await client.query(
-    'INSERT INTO xp_events (user_id, activity_id, event_type, xp_delta, idempotency_key) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id',
-    [userId, activityId, eventType, decision.xp, key]
-  );
-  if (!ins.rowCount) return { xp: 0, reason: 'duplicate', capped: false, key };
+  try {
+    await XpEvent.create([{ userId, activityId, eventType, xpDelta: decision.xp, idempotencyKey: key }], opts);
+  } catch (e) {
+    if (e && e.code === 11000) return { xp: 0, reason: 'duplicate', capped: false, key };
+    throw e;
+  }
   if (decision.xp > 0) {
-    await client.query('UPDATE xp_daily_totals SET total = total + $3 WHERE user_id = $1 AND day = $2', [userId, day, decision.xp]);
-    const { rows: levels } = await client.query('SELECT level, name, xp_threshold FROM levels');
-    const { rows: prog } = await client.query(
-      `INSERT INTO user_progress (user_id, xp_total) VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET xp_total = user_progress.xp_total + EXCLUDED.xp_total, updated_at = now()
-       RETURNING xp_total, level`,
-      [userId, decision.xp]
-    );
-    if (levels.length) {
-      const lvl = levelForXp(prog[0].xp_total, levels);
-      if (lvl.level !== prog[0].level) {
-        await client.query('UPDATE user_progress SET level = $2 WHERE user_id = $1', [userId, lvl.level]);
-        return { ...decision, key, leveledUp: lvl.level > prog[0].level, level: lvl };
+    await XpDailyTotal.updateOne({ userId, day }, { $inc: { total: decision.xp } }, opts);
+    const user = await User.findOneAndUpdate(
+      { _id: userId },
+      { $inc: { 'progress.xpTotal': decision.xp }, $set: { 'progress.updatedAt': new Date() } },
+      { new: true, ...opts }
+    )
+      .select('progress')
+      .lean();
+    const levels = await Level.find({}).select('level name xpThreshold').session(session || null).lean();
+    if (user && levels.length) {
+      const prevLevel = (user.progress && user.progress.level) || 1;
+      const lvl = levelForXp(user.progress.xpTotal, levels);
+      if (lvl.level !== prevLevel) {
+        await User.updateOne({ _id: userId }, { $set: { 'progress.level': lvl.level } }, opts);
+        return { ...decision, key, leveledUp: lvl.level > prevLevel, level: lvl };
       }
     }
   }

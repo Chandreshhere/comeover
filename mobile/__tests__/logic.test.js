@@ -8,7 +8,7 @@ jest.mock('react-native-keychain', () => ({
 import { coarseDistance, durationLabel, inr } from '../src/utils/format';
 import { applyTaxonomy, categories, categoryBySlug, CITY, levels } from '../src/data/catalog';
 import { mapIncoming, qs, setSelfId } from '../src/api/client';
-import { decodeJwt } from '../src/api/cognito';
+import { decodeJwt } from '../src/api/auth';
 
 describe('coarseDistance (privacy: never exact)', () => {
   it('buckets short distances', () => {
@@ -70,9 +70,9 @@ describe('query strings', () => {
 });
 
 describe('JWT decoding', () => {
-  it('reads claims from a Cognito id token', () => {
-    const payload = Buffer.from(JSON.stringify({ sub: 'abc-123', 'cognito:groups': ['admin'] })).toString('base64').replace(/=+$/, '');
+  it('reads claims from an API access token', () => {
+    const payload = Buffer.from(JSON.stringify({ sub: 'abc-123', roles: ['admin'] })).toString('base64').replace(/=+$/, '');
     global.atob = global.atob || ((s) => Buffer.from(s, 'base64').toString('binary'));
-    expect(decodeJwt(`x.${payload}.y`)).toEqual({ sub: 'abc-123', 'cognito:groups': ['admin'] });
+    expect(decodeJwt(`x.${payload}.y`)).toEqual({ sub: 'abc-123', roles: ['admin'] });
   });
 });

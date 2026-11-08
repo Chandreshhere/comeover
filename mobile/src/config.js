@@ -1,16 +1,12 @@
 // Runtime configuration. Environment values live in src/config.env.json, which
-// `npm run configure` generates from the deployed backend's CloudFormation
-// outputs (see scripts/configure.js). Nothing here is mocked: if the backend
-// isn't configured the app shows a "configuration required" state.
+// `npm run configure` writes (see scripts/configure.js). Nothing here is mocked:
+// if the backend isn't configured the app shows a "configuration required" state.
 import env from './config.env.json';
 
 export const config = {
-  // AWS (from `sam deploy` outputs)
-  API_URL: env.API_URL || '', // HttpApiUrl incl. /v1
-  WS_URL: env.WS_URL || '', // WebSocketUrl
-  AWS_REGION: env.AWS_REGION || '',
-  COGNITO_USER_POOL_ID: env.COGNITO_USER_POOL_ID || '',
-  COGNITO_CLIENT_ID: env.COGNITO_CLIENT_ID || '',
+  // Project IRL API (Node + MongoDB). API_URL includes /v1; WS_URL is wss://<host>/ws.
+  API_URL: env.API_URL || '',
+  WS_URL: env.WS_URL || '',
   MEDIA_CDN_URL: env.MEDIA_CDN_URL || '',
 
   // Store billing product ids (create these in App Store Connect / Play Console)
@@ -25,6 +21,6 @@ export const config = {
   EMERGENCY_NUMBER_IN: '112',
 };
 
-export const isConfigured = () => !!(config.API_URL && config.AWS_REGION && config.COGNITO_CLIENT_ID);
+export const isConfigured = () => !!config.API_URL;
 
 export default config;

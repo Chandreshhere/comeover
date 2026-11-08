@@ -4,11 +4,12 @@ import { colors } from '@/theme/tokens';
 
 export const REPORT_REASONS = [
   { code: 'harassment', title: 'Harassment or bullying', subtitle: 'Unwanted contact, threats, insults' },
-  { code: 'unsafe_behaviour', title: 'Unsafe behaviour at a meetup', subtitle: 'Made someone feel unsafe in person' },
-  { code: 'solicitation', title: 'Dating, paid company or selling', subtitle: 'Romantic pressure, paid services, promotions' },
-  { code: 'fake_profile', title: 'Fake profile or impersonation', subtitle: "Not who they say they are" },
-  { code: 'spam_scam', title: 'Spam or scam', subtitle: 'Links, money requests, repeated junk plans' },
-  { code: 'no_show_pattern', title: 'Repeated no-shows', subtitle: 'Keeps accepting and not turning up' },
+  // Codes match the API's REASON_CODES (backend/src/services/safety.js).
+  { code: 'safety_threat', title: 'Unsafe behaviour at a meetup', subtitle: 'Made someone feel unsafe in person' },
+  { code: 'dating_or_solicitation', title: 'Dating, paid company or selling', subtitle: 'Romantic pressure, paid services, promotions' },
+  { code: 'impersonation', title: 'Fake profile or impersonation', subtitle: "Not who they say they are" },
+  { code: 'scam', title: 'Spam or scam', subtitle: 'Links, money requests, repeated junk plans' },
+  { code: 'no_show_abuse', title: 'Repeated no-shows', subtitle: 'Keeps accepting and not turning up' },
   { code: 'underage', title: 'Might be under 18', subtitle: 'We act on these reports first' },
   { code: 'other', title: 'Something else', subtitle: 'Tell us in your own words' },
 ];

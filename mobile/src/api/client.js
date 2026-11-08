@@ -1,5 +1,5 @@
-// REST client for the Project IRL API (API Gateway HTTP API, base path /v1).
-// - Cognito access token as Bearer; one transparent refresh + retry on 401.
+// REST client for the Project IRL API (Node + MongoDB, base path /v1).
+// - API access token (JWT) as Bearer; one transparent refresh + retry on 401.
 // - Idempotency-Key on every mutating request (join, expense, payments).
 // - Typed ApiError with server `code` so screens can branch on it.
 import config, { isConfigured } from '@/config';

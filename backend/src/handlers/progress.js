@@ -1,7 +1,7 @@
 'use strict';
 // Quests, XP, levels/milestones, achievements, streaks. All derived server-side
 // from verified completions; clients can only *claim* rewards the server computed.
-const { createRouter, err } = require('../lib/http');
+const { err } = require('../lib/http');
 const { check } = require('../lib/validate');
 const db = require('../lib/db');
 const { requireUser } = require('../lib/auth');
@@ -10,33 +10,29 @@ const { evaluateQuest, periodKey, istDate, weekStart } = require('../lib/quests'
 const P = require('../lib/present');
 const S = require('../services/progress');
 
-const stripStats = ({ _stats, ...rest }) => rest;
-
-function questOut(x) {
-  return P.quest({ ...x.row, progress_count: x.progress, total: x.total, state: x.state });
-}
+const questOut = (x) => P.quest(x.quest, { progress: x.progress, total: x.total, state: x.state });
 
 async function findQuest(id) {
-  const q = await db.one('SELECT * FROM quests WHERE slug = $1 OR id::text = $1', [id]);
+  const { Quest } = require('../models');
+  const key = String(id);
+  const q = await Quest.findOne({ $or: [{ slug: key }, { _id: key }] }).lean();
   if (!q || !q.active) throw err.notFound('quest_not_found');
   return q;
 }
 
 async function milestonesFor(userId) {
-  const [prog, levels] = await Promise.all([
-    db.one('SELECT xp_total FROM user_progress WHERE user_id = $1', [userId]),
-    db.many('SELECT level, name, xp_threshold, subtitle, pictogram FROM levels WHERE level >= 2 ORDER BY level'),
-  ]);
-  const xp = prog ? prog.xp_total : 0;
+  const { User, Level } = require('../models');
+  const [user, levels] = await Promise.all([User.findById(userId).select('progress.xpTotal').lean(), Level.find({ level: { $gte: 2 } }).sort({ level: 1 }).lean()]);
+  const xp = (user && user.progress && user.progress.xpTotal) || 0;
   let currentAssigned = false;
   return levels.map((l) => {
     let state = 'locked';
-    if (xp >= l.xp_threshold) state = 'done';
+    if (xp >= l.xpThreshold) state = 'done';
     else if (!currentAssigned) {
       state = 'current';
       currentAssigned = true;
     }
-    return { id: `level-${l.level}`, title: l.name, subtitle: l.subtitle || '', pictogram: l.pictogram || 'sparkle', state, progress: Math.min(xp, l.xp_threshold), total: l.xp_threshold, xp: l.xp_threshold };
+    return { id: `level-${l.level}`, title: l.name, subtitle: l.subtitle || '', pictogram: l.pictogram || 'sparkle', state, progress: Math.min(xp, l.xpThreshold), total: l.xpThreshold, xp: l.xpThreshold };
   });
 }
 
@@ -48,7 +44,7 @@ function achievementHint(c, left) {
     case 'early_activity':
       return `Finish ${n(left, 'plan')} that starts before ${c.beforeHour || 8} AM`;
     case 'late_activity':
-      return `Finish ${n(left, 'plan')} that starts after ${((c.afterHour || 21) % 12) || 12} PM`;
+      return `Finish ${n(left, 'plan')} that starts after ${(c.afterHour || 21) % 12 || 12} PM`;
     case 'distinct_categories':
       return `Try ${n(left, 'new category')}`;
     case 'host_completed':
@@ -61,30 +57,38 @@ function achievementHint(c, left) {
 }
 
 async function achievementsFor(userId, stats) {
-  const s = stats || (await S.computeStats(db, userId));
-  const rows = await db.many(
-    `SELECT a.*, ua.earned_at, ua.evidence FROM achievements a
-       LEFT JOIN user_achievements ua ON ua.achievement_id = a.id AND ua.user_id = $1
-      WHERE a.active ORDER BY (ua.earned_at IS NULL), ua.earned_at DESC, a.title`,
-    [userId]
-  );
-  return rows.map((a) => {
-    const ev = evaluateQuest(a.criteria, s);
+  const { Achievement, UserAchievement } = require('../models');
+  const [s, defs, earned] = await Promise.all([
+    stats || S.computeStats(userId),
+    Achievement.find({ active: true }).lean(),
+    UserAchievement.find({ userId }).select('achievementId earnedAt evidence').lean(),
+  ]);
+  const mine = new Map(earned.map((e) => [e.achievementId, e]));
+  const rows = defs.map((a) => ({ a, ua: mine.get(a._id) || null }));
+  // Earned first (most recent first), then the rest by title.
+  rows.sort((x, y) => {
+    if (!!x.ua !== !!y.ua) return x.ua ? -1 : 1;
+    if (x.ua && y.ua) return new Date(y.ua.earnedAt) - new Date(x.ua.earnedAt);
+    return String(x.a.title).localeCompare(String(y.a.title));
+  });
+  return rows.map(({ a, ua }) => {
+    const criteria = a.criteria || {};
+    const ev = evaluateQuest(criteria, s);
     const left = Math.max(0, ev.total - ev.progress);
     return {
       id: a.slug,
       title: a.title,
       pictogram: a.pictogram || 'star',
-      earned: !!a.earned_at,
-      earnedAt: a.earned_at || null,
-      progress: a.earned_at ? ev.total : ev.progress,
+      earned: !!ua,
+      earnedAt: ua ? ua.earnedAt : null,
+      progress: ua ? ev.total : ev.progress,
       total: ev.total,
       criteria: a.description,
-      evidence: (a.evidence && a.evidence.summary) || null,
+      evidence: (ua && ua.evidence && ua.evidence.summary) || null,
       color: a.color,
-      category: a.criteria.category || null,
-      kind: a.criteria.type,
-      hint: a.earned_at ? null : achievementHint(a.criteria, left),
+      category: criteria.category || null,
+      kind: criteria.type,
+      hint: ua ? null : achievementHint(criteria, left),
     };
   });
 }
@@ -92,54 +96,58 @@ async function achievementsFor(userId, stats) {
 const routes = {
   'GET /v1/me/progress': async (req) => {
     const user = await requireUser(req);
-    return stripStats(await S.progressFor(db, user.id));
+    return S.stripStats(await S.progressFor(user.id));
   },
 
   'GET /v1/quests/today': async (req) => {
     const user = await requireUser(req);
-    const list = await S.questsFor(db, user.id);
+    const list = await S.questsFor(user.id);
     return { items: list.map(questOut), nextCursor: null };
   },
 
   'GET /v1/quests': async (req) => {
     const user = await requireUser(req);
     const { kind } = check({ kind: { type: 'string', enum: ['daily', 'weekly'] } }, req.query);
-    const list = await S.questsFor(db, user.id, { kind });
+    const list = await S.questsFor(user.id, { kind });
     return { items: list.map(questOut), nextCursor: null };
   },
 
   'POST /v1/quests/{questId}/start': async (req) => {
     const user = await requireUser(req);
+    const { UserQuest } = require('../models');
     const q = await findQuest(req.params.questId);
     const period = periodKey(q.kind);
-    await db.query(
-      `INSERT INTO user_quests (user_id, quest_id, period_key, state) VALUES ($1, $2, $3, 'started')
-       ON CONFLICT (user_id, quest_id, period_key) DO UPDATE SET state = CASE WHEN user_quests.state = 'available' THEN 'started' ELSE user_quests.state END, updated_at = now()`,
-      [user.id, q.id, period]
-    );
-    const list = await S.questsFor(db, user.id);
-    const mine = list.find((x) => x.row.id === q.id);
+    try {
+      await UserQuest.updateOne({ userId: user.id, questId: q._id, periodKey: period }, { $setOnInsert: { state: 'started' } }, { upsert: true });
+    } catch (e) {
+      if (!e || e.code !== 11000) throw e; // raced with another insert — fine
+    }
+    await UserQuest.updateOne({ userId: user.id, questId: q._id, periodKey: period, state: 'available' }, { $set: { state: 'started' } });
+    const list = await S.questsFor(user.id);
+    const mine = list.find((x) => x.quest._id === q._id);
+    if (!mine) throw err.notFound('quest_not_found');
     return questOut(mine);
   },
 
   'POST /v1/quests/{questId}/claim': async (req) => {
     const user = await requireUser(req);
+    const { UserQuest } = require('../models');
     const q = await findQuest(req.params.questId);
     const period = periodKey(q.kind);
-    const stats = await S.computeStats(db, user.id);
+    const stats = await S.computeStats(user.id);
     const ev = evaluateQuest(q.criteria, stats);
     if (!ev.done) throw err.conflict('quest_not_complete', 'Finish the quest first — only verified meetups count.');
-    const result = await db.withTransaction(async (client) => {
-      const { rows } = await client.query('SELECT state FROM user_quests WHERE user_id = $1 AND quest_id = $2 AND period_key = $3 FOR UPDATE', [user.id, q.id, period]);
-      if (rows[0] && rows[0].state === 'claimed') throw err.conflict('already_claimed');
-      await client.query(
-        `INSERT INTO user_quests (user_id, quest_id, period_key, state, progress) VALUES ($1, $2, $3, 'claimed', $4)
-         ON CONFLICT (user_id, quest_id, period_key) DO UPDATE SET state = 'claimed', progress = EXCLUDED.progress, updated_at = now()`,
-        [user.id, q.id, period, JSON.stringify(ev)]
+    const result = await db.withTransaction(async (session) => {
+      const existing = await UserQuest.findOne({ userId: user.id, questId: q._id, periodKey: period }).session(session).lean();
+      if (existing && existing.state === 'claimed') throw err.conflict('already_claimed');
+      await UserQuest.updateOne(
+        { userId: user.id, questId: q._id, periodKey: period },
+        { $set: { state: 'claimed', progress: ev } },
+        { upsert: true, session }
       );
-      return awardXp(client, { userId: user.id, eventType: 'quest_claimed', refId: `${q.slug}:${period}`, base: q.xp_reward });
+      return awardXp(session, { userId: user.id, eventType: 'quest_claimed', refId: `${q.slug}:${period}`, base: q.xpReward });
     });
-    const progress = stripStats(await S.progressFor(db, user.id));
+    const progress = S.stripStats(await S.progressFor(user.id));
     return { claimed: true, xpAwarded: result.xp, capped: !!result.capped, leveledUp: !!result.leveledUp, progress };
   },
 
@@ -155,7 +163,7 @@ const routes = {
 
   'GET /v1/me/roadmap': async (req) => {
     const user = await requireUser(req);
-    const progress = await S.progressFor(db, user.id);
+    const progress = await S.progressFor(user.id);
     const [milestones, achievements] = await Promise.all([milestonesFor(user.id), achievementsFor(user.id, progress._stats)]);
     return { level: progress.level, xp: progress.xp, milestones, achievements, categoryCounts: progress.categoryCounts };
   },
@@ -163,14 +171,13 @@ const routes = {
   'GET /v1/me/streak-calendar': async (req) => {
     const user = await requireUser(req);
     const { months } = check({ months: { type: 'integer', min: 1, max: 12, default: 3 } }, req.query);
-    const progress = await S.progressFor(db, user.id);
-    const freezes = new Set(
-      (await db.many("SELECT to_char(day, 'YYYY-MM-DD') AS d FROM streak_freezes WHERE user_id = $1", [user.id])).map((r) => r.d)
-    );
+    const progress = await S.progressFor(user.id);
+    const freezes = new Set(await S.freezeDays(user.id));
     const today = istDate();
-    const start = S.addDays(weekStart(new Date(Date.now() - months * 30 * 86400000)), 0);
+    const start = weekStart(new Date(Date.now() - months * 30 * 86400000));
+    const end = S.addDays(weekStart(), 6);
     const days = [];
-    for (let d = start; d <= S.addDays(weekStart(), 6); d = S.addDays(d, 1)) {
+    for (let d = start; d <= end; d = S.addDays(d, 1)) {
       const count = progress._stats.byDay[d] || 0;
       let state;
       if (d > today) state = 'future';
@@ -185,15 +192,78 @@ const routes = {
 
   'POST /v1/me/streak-freeze': async (req) => {
     const user = await requireUser(req);
+    const { StreakFreeze } = require('../models');
     const { day } = check({ day: { type: 'string', pattern: /^\d{4}-\d{2}-\d{2}$/ } }, req.body);
-    const progress = await S.progressFor(db, user.id);
+    const progress = await S.progressFor(user.id);
     if (progress.freezesLeft < 1) throw err.conflict('no_freezes_left', 'One freeze per week — it refills on Sunday.');
     const candidates = progress.week.filter((d) => d.state === 'missed' || d.state === 'rest');
     const target = day ? candidates.find((d) => d.date === day) : candidates[candidates.length - 1];
     if (!target) throw err.conflict('nothing_to_freeze', 'There is no missed day this week to protect.');
-    await db.query('INSERT INTO streak_freezes (user_id, day) VALUES ($1, $2) ON CONFLICT DO NOTHING', [user.id, target.date]);
-    return stripStats(await S.progressFor(db, user.id));
+    try {
+      await StreakFreeze.create({ userId: user.id, day: target.date });
+    } catch (e) {
+      if (!e || e.code !== 11000) throw e;
+    }
+    return S.stripStats(await S.progressFor(user.id));
   },
 };
 
-exports.handler = createRouter(routes);
+// quest_evaluate job: mark completed quests (notify once) and award earned badges.
+async function runQuestEvaluate({ userId }) {
+  if (!userId) return;
+  const { UserQuest, Achievement, UserAchievement } = require('../models');
+  const { notify } = require('../lib/notify');
+  const stats = await S.computeStats(userId);
+  const quests = await S.questsFor(userId, { stats });
+  await db.withTransaction(async (session, after) => {
+    for (const q of quests) {
+      if (q.state !== 'completed') continue;
+      const filter = { userId, questId: q.quest._id, periodKey: q.period };
+      const progress = { progress: q.progress, total: q.total };
+      const existing = await UserQuest.findOne(filter).session(session).lean();
+      let changed = false;
+      if (!existing) {
+        await UserQuest.create([{ ...filter, state: 'completed', progress }], { session });
+        changed = true;
+      } else if (existing.state === 'available' || existing.state === 'started') {
+        await UserQuest.updateOne({ _id: existing._id }, { $set: { state: 'completed', progress } }, { session });
+        changed = true;
+      }
+      if (changed) {
+        await notify(session, after, userId, {
+          type: 'quest',
+          title: `Quest complete: ${q.quest.title}`,
+          body: `Claim +${q.quest.xpReward} XP on your roadmap.`,
+          data: { questId: q.quest.slug, target: { screen: 'social_roadmap', params: {} } },
+        });
+      }
+    }
+    const earnedIds = (await UserAchievement.find({ userId }).select('achievementId').session(session).lean()).map((e) => e.achievementId);
+    const pending = await Achievement.find({ active: true, _id: { $nin: earnedIds } }).session(session).lean();
+    for (const a of pending) {
+      const c = a.criteria || {};
+      const ev = evaluateQuest(c, stats);
+      if (!ev.done) continue;
+      const summary =
+        c.type === 'category_completed'
+          ? `${ev.total} verified ${c.category} plans`
+          : c.type === 'reliability'
+            ? `${Math.round(stats.reliability.rate * 100)}% show-up across ${stats.reliability.plans} plans`
+            : `${ev.total} verified meetups`;
+      const r = await UserAchievement.updateOne(
+        { userId, achievementId: a._id },
+        { $setOnInsert: { earnedAt: new Date(), evidence: { summary, period: periodKey('daily') } } },
+        { upsert: true, session }
+      );
+      if (!r.upsertedCount) continue; // already earned (raced)
+      await notify(session, after, userId, {
+        type: 'quest',
+        title: `Badge earned: ${a.title}`,
+        body: a.description,
+        data: { achievementId: a.slug, target: { screen: 'achievement_detail', params: { id: a.slug } } },
+      });
+    }
+  });
+}
+
+module.exports = { routes, milestonesFor, achievementsFor, achievementHint, runQuestEvaluate };

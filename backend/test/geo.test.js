@@ -9,7 +9,7 @@ test('snapToGrid is deterministic per ~300 m cell', () => {
   assert.deepEqual(a, b);
 });
 
-test('snapped point stays within the cell (≤ ~215 m from original)', () => {
+test('snapped point stays within the cell (â‰¤ ~215 m from original)', () => {
   for (const [lat, lng] of [[23.0365, 72.5611], [19.076, 72.8777], [28.6139, 77.209], [12.9716, 77.5946]]) {
     const s = geo.snapToGrid(lat, lng);
     const d = geo.haversineMeters({ latitude: lat, longitude: lng }, s);
@@ -41,13 +41,13 @@ test('clampRadiusKm caps at 25 km and defaults to 3 km', () => {
 });
 
 test('presentLocation: exact only for host or accepted participant (when host allows)', () => {
-  const act = { latitude: 23.0365, longitude: 72.5611, coarse_area: 'Navrangpura', exact_location_visible_after_accept: true };
+  const act = { latitude: 23.0365, longitude: 72.5611, coarseArea: 'Navrangpura', exactLocationVisibleAfterAccept: true };
   assert.equal(geo.presentLocation(act, { isHost: true }).precision, 'exact');
   assert.equal(geo.presentLocation(act, { isAccepted: true }).precision, 'exact');
   const stranger = geo.presentLocation(act, { isAccepted: false });
   assert.equal(stranger.precision, 'approx_300m');
   assert.notEqual(stranger.latitude, act.latitude);
-  const hidden = geo.presentLocation({ ...act, exact_location_visible_after_accept: false }, { isAccepted: true });
+  const hidden = geo.presentLocation({ ...act, exactLocationVisibleAfterAccept: false }, { isAccepted: true });
   assert.equal(hidden.precision, 'approx_300m');
 });
 

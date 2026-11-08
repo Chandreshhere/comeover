@@ -1,51 +1,75 @@
 'use strict';
-// Progress computed from verified completions only (state = 'completed').
+// Progress computed from verified completions only (Participant.state = 'completed').
+// Mongo port of legacy/src/services/progress.js — same outputs.
+//
+//   const stats = await computeStats(userId);            // input for lib/quests.evaluateQuest
+//   const progress = await progressFor(userId);          // Progress model (+ _stats, stripped by handlers)
+//   const list = await questsFor(userId, { kind });      // [{ quest, period, state, progress, total }]
 const { evaluateQuest, periodKey, istDate, weekStart } = require('../lib/quests');
 const { levelForXp, DAILY_CAP } = require('../lib/xp');
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const IST_MS = 330 * 60000;
 
-async function completions(q, userId) {
-  const { rows } = await q.query(
-    `SELECT a.id, c.slug AS category, (a.host_user_id = $1) AS hosted,
-            to_char(a.starts_at AT TIME ZONE 'Asia/Kolkata', 'HH24')::int AS start_hour,
-            to_char(COALESCE(a.completed_at, p.completion_confirmed_at, a.ends_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day
-       FROM activity_participants p JOIN activities a ON a.id = p.activity_id LEFT JOIN activity_categories c ON c.id = a.category_id
-      WHERE p.user_id = $1 AND p.state = 'completed'
-      ORDER BY day`,
-    [userId]
-  );
-  return rows;
+const istHour = (d) => new Date(new Date(d).getTime() + IST_MS).getUTCHours();
+const sess = (q, session) => (session ? q.session(session) : q);
+
+function addDays(isoDate, n) {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
 }
 
-async function firstMet(q, userId) {
-  const { rows } = await q.query(
-    `SELECT p2.user_id, min(to_char(COALESCE(a.completed_at, a.ends_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS day
-       FROM activity_participants p1
-       JOIN activity_participants p2 ON p2.activity_id = p1.activity_id AND p2.user_id <> p1.user_id AND p2.state = 'completed'
-       JOIN activities a ON a.id = p1.activity_id
-      WHERE p1.user_id = $1 AND p1.state = 'completed'
-      GROUP BY p2.user_id`,
-    [userId]
-  );
-  return rows;
+// The day a completion counts on: plan completion time, else the user's confirmation, else the plan end.
+const completionDay = (activity, participant) => istDate(new Date(activity.completedAt || (participant && participant.completionConfirmedAt) || activity.endsAt));
+
+// [{ id, category, hosted, startHour, day }] sorted by day.
+async function completions(userId, session) {
+  const { Participant, Activity } = require('../models');
+  const parts = await sess(Participant.find({ userId, state: 'completed' }).select('activityId completionConfirmedAt'), session).lean();
+  if (!parts.length) return [];
+  const acts = await sess(Activity.find({ _id: { $in: parts.map((p) => p.activityId) } }).select('category hostUserId startsAt endsAt completedAt'), session).lean();
+  const byId = new Map(acts.map((a) => [a._id, a]));
+  const rows = [];
+  for (const p of parts) {
+    const a = byId.get(p.activityId);
+    if (!a) continue;
+    rows.push({ id: a._id, category: a.category || null, hosted: a.hostUserId === userId, startHour: istHour(a.startsAt), day: completionDay(a, p) });
+  }
+  return rows.sort((x, y) => (x.day < y.day ? -1 : x.day > y.day ? 1 : 0));
 }
 
-async function reliability(q, userId) {
-  const { rows } = await q.query(
-    `SELECT count(*) FILTER (WHERE kind = 'attended')::int AS attended,
-            count(*) FILTER (WHERE kind IN ('no_show','late_cancel'))::int AS missed
-       FROM reliability_events WHERE user_id = $1`,
-    [userId]
-  );
-  const { attended, missed } = rows[0];
+// People the user completed a plan with, and the first day they met: [{ userId, day }].
+async function firstMet(userId, activityIds, session) {
+  const { Participant, Activity } = require('../models');
+  if (!activityIds.length) return [];
+  const [others, acts] = await Promise.all([
+    sess(Participant.find({ activityId: { $in: activityIds }, state: 'completed', userId: { $ne: userId } }).select('activityId userId'), session).lean(),
+    sess(Activity.find({ _id: { $in: activityIds } }).select('completedAt endsAt'), session).lean(),
+  ]);
+  const dayOf = new Map(acts.map((a) => [a._id, istDate(new Date(a.completedAt || a.endsAt))]));
+  const first = new Map();
+  for (const o of others) {
+    const d = dayOf.get(o.activityId);
+    if (!d) continue;
+    if (!first.has(o.userId) || d < first.get(o.userId)) first.set(o.userId, d);
+  }
+  return [...first.entries()].map(([uid, day]) => ({ userId: uid, day }));
+}
+
+async function reliability(userId, session) {
+  const { ReliabilityEvent } = require('../models');
+  const rows = await sess(ReliabilityEvent.find({ userId, kind: { $in: ['attended', 'no_show', 'late_cancel'] } }).select('kind'), session).lean();
+  const attended = rows.filter((r) => r.kind === 'attended').length;
+  const missed = rows.length - attended;
   const n = attended + missed;
   return { rate: n ? attended / n : 1, plans: n };
 }
 
 // Stats object consumed by evaluateQuest (see lib/quests.js).
-async function computeStats(q, userId, now = new Date()) {
-  const [done, met, rel] = await Promise.all([completions(q, userId), firstMet(q, userId), reliability(q, userId)]);
+async function computeStats(userId, { now = new Date(), session } = {}) {
+  const done = await completions(userId, session);
+  const [met, rel] = await Promise.all([firstMet(userId, done.map((r) => r.id), session), reliability(userId, session)]);
   const today = istDate(now);
   const wk = weekStart(now);
   const inDay = (d) => d === today;
@@ -57,7 +81,7 @@ async function computeStats(q, userId, now = new Date()) {
     newPeople: met.filter((m) => pred(m.day)).length,
     newCategories: Object.values(firstCat).filter(pred).length,
     hostedCompleted: done.filter((r) => r.hosted && pred(r.day)).length,
-    startHours: done.filter((r) => pred(r.day)).map((r) => r.start_hour),
+    startHours: done.filter((r) => pred(r.day)).map((r) => r.startHour),
   });
   const categoryCounts = {};
   for (const r of done) if (r.category) categoryCounts[r.category] = (categoryCounts[r.category] || 0) + 1;
@@ -71,21 +95,26 @@ async function computeStats(q, userId, now = new Date()) {
   };
 }
 
-function addDays(isoDate, n) {
-  const d = new Date(`${isoDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
+// Freeze days within the last ~400 days ("YYYY-MM-DD" strings).
+async function freezeDays(userId, { now = new Date(), session } = {}) {
+  const { StreakFreeze } = require('../models');
+  const since = addDays(istDate(now), -400);
+  const rows = await sess(StreakFreeze.find({ userId, day: { $gt: since } }).select('day'), session).lean();
+  return rows.map((r) => r.day);
 }
 
-async function progressFor(q, userId, now = new Date()) {
-  const [stats, prog, levels, freezes, today] = await Promise.all([
-    computeStats(q, userId, now),
-    q.query('SELECT xp_total, weekly_goal, daily_streak_opt_in FROM user_progress WHERE user_id = $1', [userId]).then((r) => r.rows[0] || { xp_total: 0, weekly_goal: 2, daily_streak_opt_in: false }),
-    q.query('SELECT level, name, xp_threshold FROM levels ORDER BY level').then((r) => r.rows),
-    q.query("SELECT to_char(day, 'YYYY-MM-DD') AS day FROM streak_freezes WHERE user_id = $1 AND day > (now() AT TIME ZONE 'Asia/Kolkata')::date - 400", [userId]).then((r) => r.rows.map((x) => x.day)),
-    q.query('SELECT total FROM xp_daily_totals WHERE user_id = $1 AND day = $2', [userId, istDate(now)]).then((r) => (r.rows[0] ? r.rows[0].total : 0)),
+async function progressFor(userId, { now = new Date(), session, stats: given } = {}) {
+  const { User, Level, XpDailyTotal } = require('../models');
+  const [stats, user, levels, freezes, todayTotal] = await Promise.all([
+    given || computeStats(userId, { now, session }),
+    sess(User.findById(userId).select('progress'), session).lean(),
+    sess(Level.find({}).select('level name xpThreshold').sort({ level: 1 }), session).lean(),
+    freezeDays(userId, { now, session }),
+    sess(XpDailyTotal.findOne({ userId, day: istDate(now) }).select('total'), session).lean(),
   ]);
-  const xpToday = today;
+  const prog = (user && user.progress) || {};
+  const xpTotal = prog.xpTotal || 0;
+  const optIn = !!prog.dailyStreakOptIn;
   const todayDate = istDate(now);
   const wk = weekStart(now);
   const frozen = new Set(freezes);
@@ -98,28 +127,32 @@ async function progressFor(q, userId, now = new Date()) {
     else if (date === todayDate) state = count ? 'today_done' : 'today';
     else if (count) state = 'done';
     else if (frozen.has(date)) state = 'freeze';
-    else state = prog.daily_streak_opt_in ? 'missed' : 'rest';
+    else state = optIn ? 'missed' : 'rest';
     return { label, date, state };
   });
 
   // Weekly streak: consecutive weeks meeting the goal (or protected by a freeze).
-  const weeklyDone = Object.entries(stats.byDay).filter(([d]) => d >= wk).reduce((n, [, c]) => n + c, 0);
-  const goal = prog.weekly_goal || 2;
+  const weeklyDone = Object.entries(stats.byDay)
+    .filter(([d]) => d >= wk)
+    .reduce((n, [, c]) => n + c, 0);
+  const goal = prog.weeklyGoal || 2;
   let streakWeeks = weeklyDone >= goal ? 1 : 0;
   for (let w = 1; w <= 104; w += 1) {
     const start = addDays(wk, -7 * w);
     const end = addDays(start, 7);
-    const n = Object.entries(stats.byDay).filter(([d]) => d >= start && d < end).reduce((s, [, c]) => s + c, 0);
+    const n = Object.entries(stats.byDay)
+      .filter(([d]) => d >= start && d < end)
+      .reduce((s, [, c]) => s + c, 0);
     const protectedWeek = freezes.some((d) => d >= start && d < end);
     if (n >= goal || protectedWeek) streakWeeks += 1;
     else break;
   }
   const freezesThisWeek = freezes.filter((d) => d >= wk).length;
-  const lvl = levels.length ? levelForXp(prog.xp_total, levels) : { level: 1, name: 'Newcomer', next: null };
+  const lvl = levels.length ? levelForXp(xpTotal, levels) : { level: 1, name: 'Newcomer', next: null };
 
   return {
-    xp: prog.xp_total,
-    level: { level: lvl.level, name: lvl.name, xp: prog.xp_total, nextXp: lvl.next ? lvl.next.xpThreshold : null, nextName: lvl.next ? lvl.next.name : null },
+    xp: xpTotal,
+    level: { level: lvl.level, name: lvl.name, xp: xpTotal, nextXp: lvl.next ? lvl.next.xpThreshold : null, nextName: lvl.next ? lvl.next.name : null },
     completedActivities: stats.all.completed,
     peopleMet: stats.peopleMet,
     hosted: stats.all.hostedCompleted,
@@ -128,35 +161,40 @@ async function progressFor(q, userId, now = new Date()) {
     weeklyDone,
     streakWeeks,
     freezesLeft: Math.max(0, 1 - freezesThisWeek),
-    dailyStreakOptIn: !!prog.daily_streak_opt_in,
+    dailyStreakOptIn: optIn,
     dailyXpCap: DAILY_CAP,
-    xpToday,
+    xpToday: (todayTotal && todayTotal.total) || 0,
     categoryCounts: stats.all.categoryCounts,
     week,
     _stats: stats,
   };
 }
 
-async function questsFor(q, userId, { kind, stats } = {}) {
-  const s = stats || (await computeStats(q, userId));
-  const params = [userId];
-  let filter = "q.active AND (q.starts_at IS NULL OR q.starts_at <= now()) AND (q.ends_at IS NULL OR q.ends_at > now()) AND q.kind IN ('daily','weekly')";
-  if (kind) {
-    params.push(kind);
-    filter += ` AND q.kind = $${params.length}`;
-  }
-  const { rows } = await q.query(`SELECT q.* FROM quests q WHERE ${filter} ORDER BY q.kind, q.xp_reward`, params);
-  const { rows: uq } = await q.query('SELECT quest_id, period_key, state FROM user_quests WHERE user_id = $1', [userId]);
-  return rows.map((row) => {
-    const period = periodKey(row.kind);
-    const ev = evaluateQuest(row.criteria, s);
-    const mine = uq.find((u) => u.quest_id === row.id && u.period_key === period);
+// Active daily/weekly quests with server-evaluated state for this period.
+async function questsFor(userId, { kind, stats, now = new Date(), session } = {}) {
+  const { Quest, UserQuest } = require('../models');
+  const s = stats || (await computeStats(userId, { now, session }));
+  const filter = {
+    active: true,
+    kind: kind ? kind : { $in: ['daily', 'weekly'] },
+    $and: [{ $or: [{ startsAt: null }, { startsAt: { $lte: now } }] }, { $or: [{ endsAt: null }, { endsAt: { $gt: now } }] }],
+  };
+  const [quests, mine] = await Promise.all([
+    sess(Quest.find(filter).sort({ kind: 1, xpReward: 1 }), session).lean(),
+    sess(UserQuest.find({ userId }).select('questId periodKey state'), session).lean(),
+  ]);
+  return quests.map((quest) => {
+    const period = periodKey(quest.kind, now);
+    const ev = evaluateQuest(quest.criteria, s);
+    const uq = mine.find((u) => u.questId === quest._id && u.periodKey === period);
     let state = 'available';
-    if (mine && mine.state === 'claimed') state = 'claimed';
+    if (uq && uq.state === 'claimed') state = 'claimed';
     else if (ev.done) state = 'completed';
-    else if (ev.progress > 0 || (mine && mine.state === 'started')) state = 'started';
-    return { row, period, state, progress: ev.progress, total: ev.total };
+    else if (ev.progress > 0 || (uq && uq.state === 'started')) state = 'started';
+    return { quest, period, state, progress: ev.progress, total: ev.total };
   });
 }
 
-module.exports = { DAY_LABELS, computeStats, progressFor, questsFor, addDays };
+const stripStats = ({ _stats, ...rest }) => rest;
+
+module.exports = { DAY_LABELS, addDays, completions, firstMet, reliability, computeStats, freezeDays, progressFor, questsFor, stripStats };

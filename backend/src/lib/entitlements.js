@@ -2,6 +2,7 @@
 // Server-owned entitlements + remotely configurable feature matrix
 // (05_monetization_model.json). Safety, reporting, blocking, basic join/create
 // and accepted-plan chat are NEVER gated.
+const config = require('../config');
 
 const NEVER_GATED = new Set(['safety', 'reporting', 'blocking', 'basic_join', 'basic_create', 'accepted_plan_chat', 'core_quests', 'browse']);
 
@@ -28,9 +29,9 @@ const DEFAULT_MATRIX = {
 
 const PLANS = [
   { code: 'free', name: 'Free', priceMonthlyInr: 0, target: 'everyone', features: ['browse', 'basic_create', 'basic_join', 'accepted_plan_chat', 'safety', 'core_quests'] },
-  { code: 'plus', name: 'Plus', priceMonthlyInr: 149, alternativeTestPriceInr: 199, target: 'active members', store: { apple: process.env.IAP_PLUS_PRODUCT_ID || 'irl_plus_monthly', google: process.env.IAP_PLUS_PRODUCT_ID || 'irl_plus_monthly' } },
-  { code: 'pro', name: 'Pro', priceMonthlyInr: 399, alternativeTestPriceInr: 499, target: 'power hosts and community organisers', store: { apple: process.env.IAP_PRO_PRODUCT_ID || 'irl_pro_monthly', google: process.env.IAP_PRO_PRODUCT_ID || 'irl_pro_monthly' } },
-  { code: 'venue', name: 'Venue / Club', priceMonthlyInr: 999, alternativeTestPriceInr: 1499, target: 'local businesses, clubs and organisers', billing: 'razorpay_invoice' },
+  { code: 'plus', name: 'Plus', priceMonthlyInr: 149, alternativeTestPriceInr: 199, target: 'active members', store: { apple: config.iap.plusProductId, google: config.iap.plusProductId } },
+  { code: 'pro', name: 'Pro', priceMonthlyInr: 399, alternativeTestPriceInr: 499, target: 'power hosts and community organisers', store: { apple: config.iap.proProductId, google: config.iap.proProductId } },
+  { code: 'venue', name: 'Venue / Club', priceMonthlyInr: config.razorpay.venuePlanPriceInr, alternativeTestPriceInr: 1499, target: 'local businesses, clubs and organisers', billing: 'razorpay_invoice' },
 ];
 
 const RANK = { free: 0, plus: 1, pro: 2 };
@@ -51,8 +52,9 @@ function plansWithFeatures() {
   }));
 }
 
+// rows: [{ entitlement, expiresAt }]
 function activeEntitlements(rows, now = new Date()) {
-  return rows.filter((r) => !r.expires_at || new Date(r.expires_at) > now).map((r) => r.entitlement);
+  return rows.filter((r) => !(r.expiresAt || r.expires_at) || new Date(r.expiresAt || r.expires_at) > now).map((r) => r.entitlement);
 }
 
 function hasFeature(active, feature) {
@@ -71,22 +73,31 @@ function productToEntitlement(productId) {
   return null;
 }
 
-async function getActive(db, userId) {
-  const { rows } = await db.query('SELECT entitlement, expires_at, source FROM entitlements WHERE user_id = $1', [userId]);
-  return activeEntitlements(rows);
+async function getActive(userId, { session } = {}) {
+  const { Entitlement } = require('../models');
+  const q = Entitlement.find({ userId }).select('entitlement expiresAt source').lean();
+  if (session) q.session(session);
+  return activeEntitlements(await q);
 }
 
-async function grant(db, { userId, entitlement, source, sourceRef, expiresAt }) {
-  await db.query(
-    `INSERT INTO entitlements (user_id, entitlement, source, source_ref, expires_at) VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (user_id, entitlement) DO UPDATE SET source = EXCLUDED.source, source_ref = EXCLUDED.source_ref,
-       expires_at = GREATEST(entitlements.expires_at, EXCLUDED.expires_at), updated_at = now()`,
-    [userId, entitlement, source, sourceRef || null, expiresAt || null]
+// Upsert; never shortens an existing expiry (GREATEST semantics).
+async function grant({ userId, entitlement, source, sourceRef, expiresAt }, { session } = {}) {
+  const { Entitlement } = require('../models');
+  const existing = await Entitlement.findOne({ userId, entitlement }).session(session || null).lean();
+  let exp = expiresAt ? new Date(expiresAt) : null;
+  if (existing && existing.expiresAt && exp && existing.expiresAt > exp) exp = existing.expiresAt;
+  if (existing && existing.expiresAt === null && existing.source === 'grant') exp = null; // permanent grants stay permanent
+  await Entitlement.updateOne(
+    { userId, entitlement },
+    { $set: { source, sourceRef: sourceRef || null, expiresAt: exp } },
+    { upsert: true, session }
   );
 }
 
-async function revoke(db, { userId, entitlement, sourceRef }) {
-  await db.query('UPDATE entitlements SET expires_at = now(), updated_at = now() WHERE user_id = $1 AND entitlement = $2 AND ($3::text IS NULL OR source_ref = $3)', [userId, entitlement, sourceRef || null]);
+async function revoke({ userId, entitlement, sourceRef }, { session } = {}) {
+  const { Entitlement } = require('../models');
+  const filter = { userId, entitlement, ...(sourceRef ? { sourceRef } : {}) };
+  await Entitlement.updateMany(filter, { $set: { expiresAt: new Date() } }, { session });
 }
 
 module.exports = { NEVER_GATED, DEFAULT_MATRIX, PLANS, matrix, plansWithFeatures, activeEntitlements, hasFeature, productToEntitlement, getActive, grant, revoke };

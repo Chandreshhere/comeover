@@ -1,14 +1,16 @@
 'use strict';
 // Push delivery via FCM HTTP v1 (Android directly, iOS through FCM→APNs).
-// Respects per-category preferences, quiet hours and marketing consent.
+// Respects per-category preferences (User.notificationPrefs), quiet hours and marketing consent.
 const { getAccessToken, projectId } = require('./googleAuth');
+const logger = require('../logger');
 
 const CATEGORY_PREF = {
-  join: 'join_requests',
+  join: 'joinRequests',
   message: 'messages',
-  activity: 'nearby_activities',
-  quest: 'quest_reminders',
-  marketing: 'product_updates',
+  activity: 'nearbyActivities',
+  nearby: 'nearbyActivities',
+  quest: 'questReminders',
+  marketing: 'productUpdates',
   safety: null, // safety notices are always delivered
   system: null,
 };
@@ -28,24 +30,28 @@ function isQuietHours(now, start, end, offsetMin = 330) {
   return s < e ? mins >= s && mins < e : mins >= s || mins < e;
 }
 
+// prefs = User.notificationPrefs (camelCase) or null.
 function shouldDeliver(prefs, type, now = new Date()) {
   if (!prefs) return type !== 'marketing';
   const key = CATEGORY_PREF[type];
   if (key && prefs[key] === false) return false;
-  if (type === 'marketing' && !prefs.product_updates) return false;
+  if (type === 'marketing' && !prefs.productUpdates) return false;
   if (type === 'safety') return true;
-  const q = prefs.quiet_hours || {};
+  const q = prefs.quietHours || {};
   return !isQuietHours(now, q.start, q.end);
 }
 
+// FCM data values must be strings; objects (e.g. target) are JSON-encoded.
+const stringifyData = (data = {}) =>
+  Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)]));
+
 async function sendToTokens(tokens, notification) {
-  if (!tokens.length) return { sent: 0 };
+  if (!tokens.length) return { sent: 0, invalid: [] };
   const token = await getAccessToken('https://www.googleapis.com/auth/firebase.messaging').catch(() => null);
   const project = await projectId();
   if (!token || !project) {
-    // TODO(credentials): configure FCM service account to enable push.
-    console.log(JSON.stringify({ level: 'warn', msg: 'push_not_configured', count: tokens.length }));
-    return { sent: 0, skipped: 'not_configured' };
+    logger.warn({ msg: 'push_not_configured', count: tokens.length });
+    return { sent: 0, invalid: [], skipped: 'not_configured' };
   }
   let sent = 0;
   const invalid = [];
@@ -57,7 +63,7 @@ async function sendToTokens(tokens, notification) {
         message: {
           token: t,
           notification: { title: notification.title, body: notification.body || '' },
-          data: Object.fromEntries(Object.entries(notification.data || {}).map(([k, v]) => [k, String(v)])),
+          data: stringifyData(notification.data),
           android: { priority: 'high' },
           apns: { payload: { aps: { sound: 'default' } } },
         },
@@ -69,4 +75,4 @@ async function sendToTokens(tokens, notification) {
   return { sent, invalid };
 }
 
-module.exports = { isQuietHours, shouldDeliver, sendToTokens, CATEGORY_PREF };
+module.exports = { isQuietHours, shouldDeliver, stringifyData, sendToTokens, CATEGORY_PREF };

@@ -1,129 +1,181 @@
 'use strict';
-// /v1/auth/* — thin, unauthenticated proxy over Cognito CUSTOM_AUTH so the
-// mobile client keeps the simple contract (POST otp/request → otp/verify).
-// The OTP itself is generated, sent, rate-limited and verified inside the
-// Cognito triggers (handlers/cognito/triggers.js); this proxy never sees codes
-// except to forward the user's answer. Clients may also talk to Cognito directly.
-const crypto = require('crypto');
-const { createRouter, err } = require('../lib/http');
-const { check } = require('../lib/validate');
-const db = require('../lib/db');
+// Phone sign-in with Slide OTP (https://slide.synquic.com) + our own tokens.
+//
+//   POST /v1/auth/otp/request      { phone }                 → { requestId, channel, retryAfterSec, maskedPhone }
+//   POST /v1/auth/otp/resend       { requestId, channel? }   → { requestId, channel, retryAfterSec, notice? }
+//   POST /v1/auth/otp/verify       { requestId, code }       → { accessToken, refreshToken, expiresIn, tokenType, isNewUser, user: { id, roles } }
+//   POST /v1/auth/session/refresh  { refreshToken }          → { accessToken, refreshToken (rotated), expiresIn, tokenType }
+//   POST /v1/auth/logout           { refreshToken }          → { ok }
+//   POST /v1/auth/logout-all       (Bearer)                  → { ok, revoked }
+//   GET  /v1/admin/me              (Bearer, admin|moderator) → { id, name, phone (masked), role }
+//
+// The Slide API key and widget id stay on the server. Slide proves phone
+// ownership; we look up / create the user by phone and issue our own session.
+const config = require('../config');
+const logger = require('../logger');
+const { err } = require('../lib/http');
+const slide = require('../lib/slide');
+const { normalizePhone, maskPhone } = require('../lib/phone');
 const { enforce } = require('../lib/rateLimit');
-const { cognito } = require('../lib/aws');
+const tokens = require('../lib/tokens');
+const { requireUser, requireAdmin } = require('../lib/auth');
+const { audit } = require('../lib/audit');
 
-const C = () => require('@aws-sdk/client-cognito-identity-provider');
-const clientId = () => {
-  if (!process.env.USER_POOL_CLIENT_ID) throw err.unavailable('auth_not_configured');
-  return process.env.USER_POOL_CLIENT_ID;
-};
+const ipOf = (req) => req.ip || 'unknown';
+const CODE_RE = /^\d{4,8}$/;
 
-// India-first: accept 10-digit local numbers and normalise to +91.
-function normalisePhone(raw) {
-  const digits = String(raw || '').replace(/[^\d+]/g, '');
-  if (/^\+[1-9]\d{7,14}$/.test(digits)) return digits;
-  if (/^[6-9]\d{9}$/.test(digits)) return `+91${digits}`;
-  if (/^91[6-9]\d{9}$/.test(digits)) return `+${digits}`;
-  throw err.badRequest('invalid_phone', 'Enter a valid mobile number');
-}
-
-async function initiate(phone) {
-  const { InitiateAuthCommand } = C();
-  return cognito().send(new InitiateAuthCommand({ AuthFlow: 'CUSTOM_AUTH', ClientId: clientId(), AuthParameters: { USERNAME: phone } }));
-}
-
-function decodeJwt(token) {
-  try {
-    return JSON.parse(Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
-  } catch (e) {
-    return {};
+function mapSlideError(e, { phase }) {
+  if (!(e instanceof slide.SlideError)) throw e;
+  switch (e.kind) {
+    case 'not_configured':
+      return err.unavailable('auth_not_configured', 'Sign-in is not configured on this server.');
+    case 'rate_limited':
+      return err.tooMany(e.retryAfterSec || 60, 'otp_rate_limited', 'Too many codes requested. Please wait and try again.');
+    case 'invalid':
+      if (phase === 'send') return err.badRequest('invalid_phone', 'Enter a valid mobile number');
+      if (phase === 'resend') return err.badRequest('otp_expired', 'That code has expired. Request a new one.');
+      return err.badRequest('otp_invalid', "That code didn't match. Check the message and try again.");
+    case 'unauthorized':
+      logger.error({ msg: 'slide_unauthorized', phase, status: e.status }); // bad/expired API key or missing scope
+      return err.unavailable('slide_unavailable', "We couldn't send a code right now. Try again in a minute.");
+    default:
+      logger.warn({ msg: 'slide_unavailable', phase, kind: e.kind, status: e.status, err: e.message });
+      return err.unavailable('slide_unavailable', "We couldn't send a code right now. Try again in a minute.");
   }
+}
+
+function assertConfigured() {
+  if (!slide.isConfigured()) throw err.unavailable('auth_not_configured', 'Sign-in is not configured on this server.');
+}
+
+async function findOrCreateUser(phone) {
+  const { User } = require('../models');
+  let user = await User.findOne({ phone }).lean();
+  let created = false;
+  if (!user) {
+    try {
+      user = (await User.create({ phone })).toObject();
+      created = true;
+    } catch (e) {
+      if (e && e.code === 11000) user = await User.findOne({ phone }).lean();
+      else throw e;
+    }
+  }
+  return { user, created };
 }
 
 const routes = {
   'POST /v1/auth/otp/request': async (req) => {
-    const { phone: raw } = check({ phone: { type: 'string', required: true, max: 20 } }, req.body);
-    const phone = normalisePhone(raw);
-    await enforce(db, 'otp_send_ip', req.ip || 'unknown');
-    let res;
+    assertConfigured();
+    const phone = normalizePhone(req.body.phone);
+    await enforce('otp_send_ip', ipOf(req), 1, { code: 'rate_limited' });
+    await enforce('otp_send_phone', phone, 1, { code: 'otp_rate_limited', message: 'Too many codes requested. Please wait and try again.' });
+    let sent;
     try {
-      res = await initiate(phone);
+      sent = await slide.sendOtp(phone);
     } catch (e) {
-      if (e.name === 'UserNotFoundException') {
-        const { SignUpCommand } = C();
-        await cognito().send(
-          new SignUpCommand({
-            ClientId: clientId(),
-            Username: phone,
-            // Password is never used (CUSTOM_AUTH only) but Cognito requires one.
-            Password: `${crypto.randomBytes(24).toString('base64url')}Aa1!`,
-            UserAttributes: [{ Name: 'phone_number', Value: phone }],
-          })
-        );
-        res = await initiate(phone);
-      } else if (e.name === 'UserLambdaValidationException' && /rate limited/i.test(e.message)) {
-        throw err.tooMany(60, 'otp_rate_limited', 'Too many codes requested. Wait a minute and try again.');
-      } else if (e.name === 'NotAuthorizedException') {
-        throw err.forbidden('sign_in_blocked', 'Sign-in is not available for this number');
-      } else {
-        throw e;
-      }
+      throw mapSlideError(e, { phase: 'send' });
     }
-    return { sent: true, session: res.Session, challenge: res.ChallengeName, retryAfterSec: 30, maskedPhone: res.ChallengeParameters && res.ChallengeParameters.phone };
+    const { OtpRequest } = require('../models');
+    await OtpRequest.create({
+      _id: sent.requestId,
+      phone,
+      ip: req.ip || null,
+      channel: sent.channel,
+      lastSentAt: new Date(),
+      expiresAt: new Date(Date.now() + config.slide.otpTtlSec * 1000),
+    });
+    return { requestId: sent.requestId, channel: sent.channel, retryAfterSec: config.slide.resendAfterSec, maskedPhone: maskPhone(phone) };
+  },
+
+  'POST /v1/auth/otp/resend': async (req) => {
+    assertConfigured();
+    const requestId = String(req.body.requestId || '');
+    const channel = req.body.channel;
+    const { OtpRequest } = require('../models');
+    const otp = await OtpRequest.findById(requestId).lean();
+    if (!otp || otp.verifiedAt || otp.expiresAt < new Date()) throw err.badRequest('otp_expired', 'That code has expired. Request a new one.');
+    const waited = (Date.now() - new Date(otp.lastSentAt).getTime()) / 1000;
+    if (waited < config.slide.resendAfterSec) {
+      throw err.tooMany(Math.ceil(config.slide.resendAfterSec - waited), 'otp_rate_limited', 'Please wait before requesting another code.');
+    }
+    await enforce('otp_resend_phone', otp.phone, 1, { code: 'otp_rate_limited', message: 'Too many codes requested. Please wait and try again.' });
+    let r;
+    try {
+      r = await slide.retryOtp(requestId, channel);
+    } catch (e) {
+      throw mapSlideError(e, { phase: 'resend' });
+    }
+    await OtpRequest.updateOne({ _id: requestId }, { $set: { lastSentAt: new Date(), channel: r.channel || otp.channel }, $inc: { resendCount: 1 } });
+    return { requestId: r.requestId || requestId, channel: r.channel || otp.channel, retryAfterSec: config.slide.resendAfterSec, ...(r.notice ? { notice: r.notice } : {}) };
   },
 
   'POST /v1/auth/otp/verify': async (req) => {
-    const v = check(
-      {
-        phone: { type: 'string', required: true, max: 20 },
-        code: { type: 'string', required: true, pattern: /^\d{6}$/ },
-        session: { type: 'string', required: true, max: 4096 },
-      },
-      req.body
-    );
-    const phone = normalisePhone(v.phone);
-    const { RespondToAuthChallengeCommand } = C();
-    let res;
+    assertConfigured();
+    const requestId = String(req.body.requestId || '');
+    const code = String(req.body.code || '').trim();
+    if (!requestId) throw err.badRequest('otp_expired', 'That code has expired. Request a new one.');
+    if (!CODE_RE.test(code)) throw err.badRequest('otp_invalid', "That code didn't match. Check the message and try again.");
+    await enforce('otp_verify_ip', ipOf(req), 1, { code: 'rate_limited' });
+
+    const { OtpRequest } = require('../models');
+    const max = config.slide.maxVerifyAttempts;
+    const existing = await OtpRequest.findById(requestId).lean();
+    if (!existing || existing.verifiedAt || existing.expiresAt < new Date()) throw err.badRequest('otp_expired', 'That code has expired. Request a new one.');
+    if (existing.attempts >= max) throw err.badRequest('otp_locked', 'Too many wrong codes. Request a new one.');
+    const otp = await OtpRequest.findOneAndUpdate({ _id: requestId, verifiedAt: null, attempts: { $lt: max } }, { $inc: { attempts: 1 } }, { new: true }).lean();
+    if (!otp) throw err.badRequest('otp_locked', 'Too many wrong codes. Request a new one.');
+
+    let slideToken;
     try {
-      res = await cognito().send(
-        new RespondToAuthChallengeCommand({ ClientId: clientId(), ChallengeName: 'CUSTOM_CHALLENGE', Session: v.session, ChallengeResponses: { USERNAME: phone, ANSWER: v.code } })
-      );
+      slideToken = (await slide.verifyOtp(requestId, code)).accessToken;
     } catch (e) {
-      if (e.name === 'NotAuthorizedException') throw err.unauthorized('otp_locked', 'Too many attempts or the code expired. Request a new code.');
-      if (e.name === 'CodeMismatchException' || e.name === 'ExpiredCodeException') throw err.badRequest('otp_invalid', "That code didn't match.");
-      throw e;
+      if (e instanceof slide.SlideError && e.kind === 'invalid') {
+        if (otp.attempts >= max) throw err.badRequest('otp_locked', 'Too many wrong codes. Request a new one.');
+        throw err.badRequest('otp_invalid', "That code didn't match. Check the message and try again.", { attemptsLeft: max - otp.attempts });
+      }
+      throw mapSlideError(e, { phase: 'verify' });
     }
-    if (!res.AuthenticationResult) {
-      // Wrong code but attempts remain: Cognito returns a fresh session.
-      throw err.badRequest('otp_invalid', "That code didn't match. Check the SMS and try again.", { session: res.Session });
+    let confirmed;
+    try {
+      confirmed = await slide.verifyToken(slideToken);
+    } catch (e) {
+      throw mapSlideError(e, { phase: 'verify' });
     }
-    const a = res.AuthenticationResult;
-    const idClaims = decodeJwt(a.IdToken);
-    const profile = idClaims.sub
-      ? await db.one('SELECT p.user_id FROM app_users u JOIN profiles p ON p.user_id = u.id WHERE u.cognito_sub = $1', [idClaims.sub]).catch(() => null)
-      : null;
-    return { accessToken: a.AccessToken, idToken: a.IdToken, refreshToken: a.RefreshToken, expiresIn: a.ExpiresIn, tokenType: a.TokenType, isNewUser: !profile };
+    if (!confirmed.verified || confirmed.identifier !== otp.phone) {
+      logger.warn({ msg: 'slide_identifier_mismatch', requestId });
+      throw err.badRequest('otp_invalid', "That code didn't match. Check the message and try again.");
+    }
+    await OtpRequest.updateOne({ _id: requestId }, { $set: { verifiedAt: new Date() } });
+
+    const { user, created } = await findOrCreateUser(otp.phone);
+    if (user.status === 'deleted') throw err.forbidden('account_deleted', 'This account is pending deletion. Contact support to restore it.');
+    const t = await tokens.issueTokens(user, { ip: req.ip, userAgent: req.headers['user-agent'] });
+    await audit({ actorUserId: user._id, action: created ? 'auth.sign_up' : 'auth.sign_in', targetType: 'user', targetId: user._id, ip: req.ip, metadata: { channel: otp.channel } }).catch(() => {});
+    return { ...t, isNewUser: !(user.profile && user.profile.displayName), user: { id: user._id, roles: user.roles || [] } };
   },
 
   'POST /v1/auth/session/refresh': async (req) => {
-    const { refreshToken } = check({ refreshToken: { type: 'string', required: true, max: 8192 } }, req.body);
-    const { InitiateAuthCommand } = C();
-    try {
-      const res = await cognito().send(new InitiateAuthCommand({ AuthFlow: 'REFRESH_TOKEN_AUTH', ClientId: clientId(), AuthParameters: { REFRESH_TOKEN: refreshToken } }));
-      const a = res.AuthenticationResult;
-      return { accessToken: a.AccessToken, idToken: a.IdToken, expiresIn: a.ExpiresIn, tokenType: a.TokenType };
-    } catch (e) {
-      if (e.name === 'NotAuthorizedException') throw err.unauthorized('session_expired', 'Please sign in again');
-      throw e;
-    }
+    await enforce('refresh_ip', ipOf(req), 1, { code: 'rate_limited' });
+    return tokens.rotateRefreshToken(req.body.refreshToken, { ip: req.ip, userAgent: req.headers['user-agent'] });
   },
 
   'POST /v1/auth/logout': async (req) => {
-    const { refreshToken } = check({ refreshToken: { type: 'string', required: true, max: 8192 } }, req.body);
-    const { RevokeTokenCommand } = C();
-    await cognito().send(new RevokeTokenCommand({ ClientId: clientId(), Token: refreshToken })).catch(() => {});
+    await tokens.revokeRefreshToken(req.body.refreshToken);
     return { ok: true };
+  },
+
+  'POST /v1/auth/logout-all': async (req) => {
+    const user = await requireUser(req, { allowSuspended: true });
+    const revoked = await tokens.revokeAllForUser(user.id);
+    await audit({ actorUserId: user.id, action: 'auth.logout_all', targetType: 'user', targetId: user.id, ip: req.ip }).catch(() => {});
+    return { ok: true, revoked };
+  },
+
+  'GET /v1/admin/me': async (req) => {
+    const admin = await requireAdmin(req, 'moderator');
+    return { id: admin.id, name: admin.name, phone: maskPhone(admin.phone), role: admin.role };
   },
 };
 
-exports.normalisePhone = normalisePhone;
-exports.handler = createRouter(routes);
+module.exports = { routes, mapSlideError };

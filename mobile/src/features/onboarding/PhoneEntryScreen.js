@@ -33,7 +33,7 @@ export default function PhoneEntryScreen() {
     setRateLimited(false);
     try {
       const res = await requestOtp(`+91${digits}`);
-      nav.navigate('otp_verify', { mode: route.params?.mode, retryAfterSec: res?.retryAfterSec });
+      nav.navigate('otp_verify', { mode: route.params?.mode, retryAfterSec: res?.retryAfterSec, channel: res?.channel, maskedPhone: res?.maskedPhone });
     } catch (e) {
       if (e?.code === 'otp_rate_limited') {
         setRateLimited(true);

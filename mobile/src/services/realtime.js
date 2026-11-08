@@ -1,5 +1,5 @@
-// API Gateway WebSocket client. Auth via ?token=<Cognito access token> on
-// $connect; channels: activity:{id}, conversation:{id}, user:{id}:notifications.
+// WebSocket client for the API server (wss://<host>/ws). Auth via
+// ?token=<API access token>; channels: activity:{id}, conversation:{id}, user:{id}:notifications.
 // Envelope: { type: 'message.created'|'join.updated'|'activity.updated'|'notification.created', data }.
 import { AppState } from 'react-native';
 import config from '@/config';

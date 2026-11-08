@@ -11,7 +11,7 @@ import { fadeIn } from '@/theme/motion';
 export default function BootSplashScreen() {
   const nav = useNavigation();
 
-  // The Cognito session + /me/bootstrap are resolved by App (initSession) before
+  // The stored session + /me/bootstrap are resolved by App (initSession) before
   // this screen mounts, so routing reads settled server state.
   useEffect(() => {
     const t = setTimeout(() => {

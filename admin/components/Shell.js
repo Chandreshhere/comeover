@@ -75,7 +75,7 @@ export default function Shell({ children }) {
             <h1 className="h2">No admin role</h1>
           </div>
           <p className="soft">
-            You are signed in as <b>{session.email || session.name}</b>, but your account is not in the <b>admin</b> or <b>moderator</b> Cognito group. Ask an admin to add you, then sign in again.
+            You are signed in as <b>{session.phone || session.name}</b>, but your account doesn&apos;t have the <b>admin</b> or <b>moderator</b> role. Ask an admin to grant it (backend: <span className="mono">npm run grant-role</span>), then sign in again.
           </p>
           <button className="btn" onClick={logout}>
             <Icon name="logout" /> Sign out

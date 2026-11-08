@@ -1,13 +1,13 @@
 # Project IRL API reference
 
-Base URL is the stack output **`HttpApiUrl`**, which already ends in `/v1`. Every path below is relative to it, so `GET /me` means `GET {HttpApiUrl}/me`.
+The API is a Node.js (Express) server on MongoDB, deployed with Docker. The base URL is `https://<api-host>/v1`, and every path below is relative to it, so `GET /me` means `GET https://<api-host>/v1/me`. The WebSocket endpoint is `wss://<api-host>/ws`.
 
 ## Conventions
 
 - **JSON**: request and response bodies are camelCase JSON (`Content-Type: application/json`).
 - **Auth** (one of four modes per endpoint):
-  - **App**: `Authorization: Bearer <access token>` from the app user pool.
-  - **Admin** / **Admin (moderator+)**: a token from the admin user pool. The Cognito group `admin` can call everything. The group `moderator` can call reports, activities, users and audit only.
+  - **App**: `Authorization: Bearer <access token>` from `POST /auth/otp/verify` or `POST /auth/session/refresh`.
+  - **Admin** / **Admin (moderator+)**: the same kind of access token, belonging to a user with the role `admin` or `moderator`. Roles are granted with `npm run grant-role`, re-read on every request, and revocable at once. `admin` can call everything; `moderator` can call reports, activities, users and audit only.
   - **None**: public endpoint (auth and webhooks).
 - **Idempotency**: send `Idempotency-Key: <uuid>` on every mutating request. On endpoints marked **idempotent**:
   - Retrying with the same key and body replays the first response and adds the header `idempotent-replay: true`.
@@ -28,8 +28,8 @@ Base URL is the stack output **`HttpApiUrl`**, which already ends in `/v1`. Ever
   | 503 | Dependency not configured |
   | 500 | Internal error |
 
-  These codes can come back from any endpoint: `unauthorized`, `user_not_provisioned`, `account_deleted`, `account_suspended`, `account_restricted`, `validation_failed`, `invalid_json`, `invalid_cursor`, `invalid_idempotency_key`, `idempotency_key_reused`, `request_in_progress`, `rate_limited`, `conflict`, `invalid_value`, `internal`.
-- **Maintenance**: when the stack runs with `MAINTENANCE_MODE=true`, every app endpoint returns `503 { code: 'maintenance', message }` with `retry-after: 300`. Admin and webhook endpoints stay up. `GET /me/bootstrap` reports the mode in `service.status`.
+  These codes can come back from any endpoint: `unauthorized`, `token_expired` (refresh, then retry), `token_invalid`, `user_not_found`, `account_deleted`, `account_suspended`, `account_restricted`, `validation_failed`, `invalid_json`, `invalid_cursor`, `invalid_idempotency_key`, `idempotency_key_reused`, `request_in_progress`, `rate_limited`, `conflict`, `invalid_value`, `internal`.
+- **Maintenance**: when the server runs with `MAINTENANCE_MODE=true`, every app endpoint returns `503 { code: 'maintenance', message }` with `retry-after: 300`. Admin, auth and webhook endpoints stay up. `GET /me/bootstrap` reports the mode in `service.status`.
 - **Times** are ISO-8601 UTC. The server computes "today" and "week" in IST, with weeks running Sunday to Saturday.
 - **Privacy**:
   - Other users' exact coordinates are never returned.
@@ -37,46 +37,34 @@ Base URL is the stack output **`HttpApiUrl`**, which already ends in `/v1`. Ever
   - Distances are banded.
 - **Money** is integer paise (`*Minor`) in INR.
 
-## Mobile sign-in flow (Cognito, no Amplify)
+## Sign-in flow (phone OTP via Slide)
 
-The flow uses Cognito's public JSON API at `https://cognito-idp.{Region}.amazonaws.com/`. Every call is `POST` with these headers:
+Codes are delivered by [Slide](https://slide.synquic.com) over WhatsApp, with SMS as the fallback, according to the OTP widget's channel order. Only the server holds the Slide API key and widget id. The app never talks to Slide; it only sees a `requestId`.
 
-- `Content-Type: application/x-amz-json-1.1`
-- `X-Amz-Target: AWSCognitoIdentityProviderService.<Action>`
-
-The app client (`UserPoolClientId`) has **no secret**, so no `SECRET_HASH` is needed.
-
-1. **Start sign-in.** Normalise the phone number to E.164 (`+91XXXXXXXXXX`), then call `InitiateAuth`:
-   `{"AuthFlow":"CUSTOM_AUTH","ClientId":"<UserPoolClientId>","AuthParameters":{"USERNAME":"+919812345678"}}`
-   - The CreateAuthChallenge Lambda sends a 6-digit SMS code through SNS. It allows 3 sends per number per hour.
-   - The response is `{ ChallengeName: "CUSTOM_CHALLENGE", Session, ChallengeParameters: { phone: "+91••••678", length: "6" } }`.
-2. **New number.** If step 1 fails with `UserNotFoundException`:
-   - Call `SignUp` with `{"ClientId":"…","Username":"+919812345678","Password":"<random 32+ chars with Aa1!>","UserAttributes":[{"Name":"phone_number","Value":"+919812345678"}]}`.
-   - The PreSignUp Lambda auto-confirms the user and marks the phone verified. The password is never used.
-   - Repeat step 1.
-3. **Answer the challenge.** Call `RespondToAuthChallenge`:
-   `{"ClientId":"…","ChallengeName":"CUSTOM_CHALLENGE","Session":"<Session>","ChallengeResponses":{"USERNAME":"+919812345678","ANSWER":"123456"}}`
-   - A wrong code returns a **new** `Session` with the challenge again. You get 3 attempts per session, and codes expire after 5 minutes.
-   - After that, `NotAuthorizedException`: request a new code.
-   - Success returns `AuthenticationResult { AccessToken, IdToken, RefreshToken, ExpiresIn }`. The PostAuthentication Lambda creates or refreshes the `app_users` row.
-4. **Refresh.** Call `InitiateAuth` with `{"AuthFlow":"REFRESH_TOKEN_AUTH","ClientId":"…","AuthParameters":{"REFRESH_TOKEN":"…"}}`. Access tokens last 60 min and refresh tokens last 90 days.
-5. **Sign out.** Call `RevokeToken` with `{"ClientId":"…","Token":"<refresh>"}`.
+1. **Request a code.** `POST /auth/otp/request { phone }`.
+   - A 10-digit Indian number is normalised to `+91…`; other numbers must be E.164.
+   - The server sends through Slide and returns `{ requestId, channel, retryAfterSec, maskedPhone }`, where `channel` is `whatsapp` or `sms`.
+   - Limits: 3 sends per number per hour and 20 per IP per hour, plus Slide's own per-number limit. All of them return `429 otp_rate_limited` (or `rate_limited` for the IP limit) with `retry-after`.
+2. **Resend (optional).** `POST /auth/otp/resend { requestId, channel? }` after `retryAfterSec`. `channel` can be `sms` or `whatsapp`; Slide reports a `notice` if it used another one.
+3. **Verify.** `POST /auth/otp/verify { requestId, code }`.
+   - The server verifies the code with Slide, confirms the phone with Slide's single-use token, then finds or creates the user by phone.
+   - It returns `{ accessToken, refreshToken, expiresIn, tokenType: "Bearer", isNewUser, user: { id, roles } }`.
+   - A wrong code returns `otp_invalid` with `details.attemptsLeft`. After 5 wrong codes, or once the code is used or expired, the request returns `otp_locked` or `otp_expired`: ask for a new code.
+4. **Tokens.**
+   - The access token is a 15-minute JWT (`sub` = user id, `roles`).
+   - The refresh token is opaque and lasts 30 days. It rotates on every `POST /auth/session/refresh`: store the new one each time.
+   - Presenting an old, already-rotated refresh token revokes that sign-in everywhere (`401 session_expired`).
+5. **Sign out.** `POST /auth/logout { refreshToken }` ends this device's session. `POST /auth/logout-all` ends every session.
 6. **Onboarding.** Then call `GET /me/bootstrap` (below):
    - If `me.session.hasProfile` is false, run onboarding.
-   - `PATCH /me` with `{ name, …, ageConfirmed: true, termsAccepted: true }`.
+   - `PATCH /me` with `{ ageConfirmed: true, termsAccepted: true }` (age gate), then `{ name, … }` (profile).
    - When onboarding is done, `PATCH /me` with `{ onboardingCompleted: true }`.
 
-The `/auth/*` endpoints below do the same thing through the API, for clients that would rather not call Cognito directly.
-
-**Admin web** signs in through the Hosted UI at `https://{CognitoDomain}`:
-
-- It uses OAuth 2.0 authorization code with PKCE and the client `AdminWebClientId`, which has no secret.
-- Scopes are `openid email profile`.
-- Admin users are created by an administrator only, MFA (TOTP) is required, and each user is put in the group `admin` or `moderator`.
+**Admin web** uses the same phone OTP flow. After sign-in it calls `GET /admin/me`, which returns `403 admin_only` unless the user has the `admin` or `moderator` role.
 
 ## Realtime (WebSocket)
 
-- **Connect** to `{WebSocketUrl}?token=<app access token>`. The token is verified against the user pool JWKS. You are auto-subscribed to `user:{yourId}:notifications`.
+- **Connect** to `wss://<api-host>/ws?token=<access token>`. The token is verified on connect; reconnect with a fresh token after a refresh. You are auto-subscribed to `user:{yourId}:notifications`. Several API instances can run behind a load balancer: events reach every instance through a MongoDB change stream.
 - **Subscribe** with `{"action":"subscribe","channel":"<channel>"}`. The reply is `{"type":"subscription.ok","channel":…}`, or `subscription.denied`.
 - **Unsubscribe** with `{"action":"unsubscribe","channel":…}`.
 - **Keepalive** with `{"action":"ping"}`, which replies `{"type":"pong"}`.
@@ -184,36 +172,52 @@ Me           { id /* real user id */, phone, ageConfirmed, onboarded, status: 'a
 
 ---
 
-## Auth (proxy over Cognito)
+## Auth (phone OTP via Slide)
 
 ### `POST /auth/otp/request`
-Auth: None.
+Auth: None. Rate limits: 3 per phone per hour, 20 per IP per hour.
 
 - Body: `{ phone }`. A 10-digit Indian number is normalised to +91.
-- Returns: `{ sent: true, session, challenge: "CUSTOM_CHALLENGE", retryAfterSec, maskedPhone }`.
-- Errors: `invalid_phone`, `otp_rate_limited` (429), `rate_limited` (per-IP), `sign_in_blocked`, `auth_not_configured`.
+- Returns: `{ requestId, channel: 'whatsapp'|'sms', retryAfterSec, maskedPhone }`.
+- Errors: `invalid_phone`, `otp_rate_limited` (429, incl. Slide's own limit), `rate_limited` (per IP), `slide_unavailable` (503), `auth_not_configured` (503).
+
+### `POST /auth/otp/resend`
+Auth: None. Rate limit: 5 per phone per hour.
+
+- Body: `{ requestId, channel?: 'sms'|'whatsapp' }`. Allowed once `retryAfterSec` has passed.
+- Returns: `{ requestId, channel, retryAfterSec, notice? }`. `notice` is set when Slide used a different channel than the one requested.
+- Errors: `otp_expired` (unknown, used or expired request), `otp_rate_limited` (429), `slide_unavailable`.
 
 ### `POST /auth/otp/verify`
-Auth: None.
+Auth: None. Rate limit: 60 per IP per hour.
 
-- Body: `{ phone, code /* 6 digits */, session }`.
-- Returns: `{ accessToken, idToken, refreshToken, expiresIn, tokenType, isNewUser }`.
+- Body: `{ requestId, code }`.
+- Returns: `{ accessToken, refreshToken, expiresIn /* 900 */, tokenType: 'Bearer', isNewUser, user: { id, roles } }`. `isNewUser` is true until the profile has a name.
 - Errors:
-  - `otp_invalid` (400). `details.session` holds the new session to retry with.
-  - `otp_locked` (401). Request a new code.
+  - `otp_invalid` (400), with `details.attemptsLeft`.
+  - `otp_locked` (400) after 5 wrong codes. Request a new code.
+  - `otp_expired` (400): the code was already used or has expired.
+  - `account_deleted` (403).
+  - `slide_unavailable` (503).
 
 ### `POST /auth/session/refresh`
-Auth: None.
+Auth: None. Rate limit: 120 per IP per hour.
 
 - Body: `{ refreshToken }`.
-- Returns: `{ accessToken, idToken, expiresIn, tokenType }`.
-- Errors: `session_expired`.
+- Returns: `{ accessToken, refreshToken /* rotated: replace the stored one */, expiresIn, tokenType }`.
+- Errors: `session_expired` (401) for an unknown, expired, revoked or already-rotated token. Reusing a rotated token also revokes that sign-in on every device.
 
 ### `POST /auth/logout`
 Auth: None.
 
-- Body: `{ refreshToken }`.
+- Body: `{ refreshToken }`. Revokes this device's session.
 - Returns: `{ ok: true }`.
+
+### `POST /auth/logout-all`
+Auth: App. Suspended accounts may call it.
+
+- Revokes every session of the signed-in user. Access tokens already issued stay valid until they expire (at most 15 min).
+- Returns: `{ ok: true, revoked }`.
 
 ## Me, profile and preferences
 
@@ -263,7 +267,7 @@ Auth: App.
 Auth: App. Suspended accounts may call it.
 
 - What happens:
-  - The account is deactivated immediately and Cognito sessions are revoked.
+  - The account is deactivated immediately and all sessions are revoked.
   - Plans you host are cancelled.
   - Personal data is anonymised after 30 days.
 - Returns: `{ status: 'deletion_pending', purgeAfter }`.
@@ -978,13 +982,19 @@ Auth: None.
 ### `POST /webhooks/google`
 Auth: None.
 
-- Play RTDN delivered by Pub/Sub push to `…/webhooks/google?token=<GoogleRtdnToken>`. The state is always re-fetched from the Play Developer API.
+- Play RTDN delivered by Pub/Sub push to `…/webhooks/google?token=<GOOGLE_RTDN_TOKEN>`. The state is always re-fetched from the Play Developer API.
 - Returns: `{ ok: true }`.
 - Errors: `invalid_token`, `billing_not_configured`.
 
-## Admin API (admin pool; Cognito groups `admin` / `moderator`)
+## Admin API (user roles `admin` / `moderator`)
 
 Every state-changing call writes `audit_events` with the admin's id. Viewing evidence and opening a report are audited too.
+
+### `GET /admin/me`
+Auth: Admin (moderator+).
+
+- Returns: `{ id, name, phone /* masked */, role: 'admin'|'moderator' }`.
+- Errors: `admin_only` (403) when the user has no admin role, `admin_disabled` (403) for suspended or deleted accounts.
 
 ### `GET /admin/kpis`
 Auth: Admin.
@@ -1034,7 +1044,7 @@ Auth: Admin (moderator+).
 - What each action does:
   - `warn`: notifies the user.
   - `limit`: blocks create, join and message.
-  - `suspend`: signs the user out and cancels plans they host.
+  - `suspend`: revokes all the user's refresh tokens (access tokens stop working on the next request, because the suspended status is re-read) and cancels open plans they host.
   - `remove_content`: deletes the message, moderates the plan, or clears the bio and avatar, depending on what was reported.
   - `dismiss`: closes the report with no action.
 - Returns: the report detail.
@@ -1073,7 +1083,7 @@ Auth: Admin (moderator+).
 Auth: Admin (moderator+). Paginated; default `limit` 50, maximum 200.
 
 - Query: `entityType`, `entityId`, `action` (prefix match).
-- Returns: `{ items: [{ id, action, entityType, entityId, actor: { type: 'admin'|'user'|'system', id, email? }, metadata, ip, createdAt }], nextCursor }`.
+- Returns: `{ items: [{ id, action, entityType, entityId, actor: { type: 'admin'|'user'|'system', id, name? /* admin display name */, email: null }, metadata, ip, createdAt }], nextCursor }`. `metadata.reason` holds the admin's written reason.
 
 ### `GET /admin/activities`
 Auth: Admin (moderator+). Paginated.
@@ -1126,14 +1136,14 @@ Auth: Admin.
 ### `POST /admin/taxonomy/categories`
 Auth: Admin.
 
-- Body: `{ slug, label, short?, pictogram?, riskLevel?, sortOrder? }`.
+- Body: `{ slug, label, short?, pictogram?, riskLevel?, sortOrder?, reason }`. `reason` is required (it is stored in the audit log), as on every admin write.
 - Returns: `201` with the category.
 - Errors: `conflict` (duplicate slug).
 
 ### `PATCH /admin/taxonomy/categories/{slug}`
 Auth: Admin.
 
-- Body: `{ label?, short?, pictogram?, riskLevel?, active?, sortOrder? }`.
+- Body: `{ label?, short?, pictogram?, riskLevel?, active?, sortOrder?, reason }`.
 - Returns: the category.
 - Errors: `category_not_found`.
 
@@ -1145,13 +1155,13 @@ Auth: Admin.
 ### `POST /admin/taxonomy/areas`
 Auth: Admin.
 
-- Body: `{ city, name, latitude, longitude }`.
+- Body: `{ city, name, latitude, longitude, active?, reason }`.
 - Returns: `201` with the area.
 
 ### `PATCH /admin/taxonomy/areas/{areaId}`
 Auth: Admin.
 
-- Body: `{ name?, active?, latitude?, longitude? }`.
+- Body: `{ name?, active?, latitude?, longitude?, reason }`. Send `latitude` and `longitude` together.
 - Returns: the area.
 - Errors: `area_not_found`, `invalid_location`.
 
@@ -1163,7 +1173,7 @@ Auth: Admin.
 ### `POST /admin/taxonomy/quests`
 Auth: Admin.
 
-- Body: `{ slug, kind: 'daily'|'weekly'|'milestone', title, description, pictogram?, criteria, xpReward /* 0–500 */, active?, startsAt?, endsAt? }`.
+- Body: `{ slug, kind: 'daily'|'weekly'|'milestone', title, description, pictogram?, criteria, xpReward /* 0–500 */, active?, startsAt?, endsAt?, reason }`.
 - `criteria.type` is one of: `complete_activities`, `new_people`, `new_category`, `host_completed`, `early_activity`, `late_activity`, `category_completed`, `distinct_categories`, `reliability`. These are verified real-world actions only.
 - Returns: `201` with the quest.
 - Errors: `invalid_criteria`.
@@ -1171,6 +1181,6 @@ Auth: Admin.
 ### `PATCH /admin/taxonomy/quests/{questId}`
 Auth: Admin.
 
-- Body: `{ title?, description?, pictogram?, xpReward?, active?, startsAt?, endsAt? }`. `questId` is the id or the slug.
+- Body: `{ title?, description?, pictogram?, xpReward?, active?, startsAt?, endsAt?, reason }`. `questId` is the id or the slug. Send `null` to clear `startsAt` or `endsAt`.
 - Returns: the quest.
 - Errors: `quest_not_found`.

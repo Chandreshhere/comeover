@@ -9,9 +9,9 @@
 
 | Concern | Service | Client code |
 |---|---|---|
-| Sign-in (phone OTP) | Amazon Cognito custom auth (public IDP JSON API, no Amplify) | `src/api/cognito.js`, tokens in Keychain/Keystore via `react-native-keychain` (`src/api/session.js`) |
-| REST API | API Gateway HTTP API + Lambda + RDS PostgreSQL/PostGIS | `src/api/client.js`, `src/api/endpoints.js` |
-| Realtime | API Gateway WebSocket (`activity:`, `conversation:`, `user:` channels) | `src/services/realtime.js` |
+| Sign-in (phone OTP) | [Slide](https://slide.synquic.com) OTP over WhatsApp or SMS, called by the API (the Slide key stays on the server). The API issues its own JWT access tokens and rotating refresh tokens. | `src/api/auth.js`, tokens in Keychain/Keystore via `react-native-keychain` (`src/api/session.js`) |
+| REST API | Node.js + Express + MongoDB (`../backend`) | `src/api/client.js`, `src/api/endpoints.js` |
+| Realtime | WebSocket on the same server (`wss://<host>/ws`; `activity:`, `conversation:`, `user:` channels) | `src/services/realtime.js` |
 | Push | Firebase Cloud Messaging (APNs via FCM on iOS) | `src/services/push.js` |
 | Maps | Google Maps SDK (Android) / Apple Maps (iOS) via `react-native-maps` | discover map, live radar |
 | Location | Device GPS, rounded to ~1 km before leaving the device | `src/services/location.js` |
@@ -23,17 +23,15 @@
 
 ## Run it
 
-Prerequisites: Node ≥ 18, JDK 17 and the Android SDK (Android), or Xcode 15+ with CocoaPods (iOS, macOS only). The backend must be deployed first (see `../backend/README.md`).
+Prerequisites: Node ≥ 18, JDK 17 and the Android SDK (Android), or Xcode 15+ with CocoaPods (iOS, macOS only). The API must be running first (see `../backend/README.md`; `docker compose up` locally).
 
 ```bash
 cd mobile
 npm install
 
-# 1. Point the app at your deployed stack (writes src/config.env.json)
-npm run configure -- --stack irl-prod --region ap-south-1
-#    or: npm run configure -- --api https://xxxx.execute-api.ap-south-1.amazonaws.com/v1 \
-#          --ws wss://yyyy.execute-api.ap-south-1.amazonaws.com/prod --region ap-south-1 \
-#          --pool ap-south-1_XXXX --client XXXXXXXX
+# 1. Point the app at your API (writes src/config.env.json; WS_URL defaults to wss://<host>/ws)
+npm run configure -- --api https://api.your-domain.com/v1
+#    Android emulator against a local API: npm run configure -- --api http://10.0.2.2:8080/v1
 
 # 2. Google Maps key (Android)
 echo MAPS_API_KEY=your_key >> android/local.properties
@@ -75,7 +73,7 @@ src/
   navigation/            inventory.js (screen ids ↔ deep-link paths), registry, tab bar, root stack
   store/useAppStore.js   single zustand store; every action calls the API (load* actions track
                          status/errors for loading, empty and error UI)
-  api/                   Cognito auth, session/refresh, REST client (Bearer + Idempotency-Key), endpoints
+  api/                   OTP auth (Slide via API), session/refresh, REST client (Bearer + Idempotency-Key), endpoints
   services/              realtime, push, billing, razorpay, upload, location
   data/catalog.js        server taxonomy (categories, levels, city areas) with an offline fallback;
                          personById backed by the store's user cache

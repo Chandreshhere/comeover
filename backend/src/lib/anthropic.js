@@ -1,29 +1,17 @@
 'use strict';
-// Claude API client for the IRL Guide. Key comes from Secrets Manager
-// (ANTHROPIC_SECRET_ARN → {"apiKey": "..."}) or ANTHROPIC_API_KEY locally.
+// Claude API client for the IRL Guide (ANTHROPIC_API_KEY). Returns null when not configured.
 const { Anthropic } = require('@anthropic-ai/sdk');
+const config = require('../config');
 
-const MODEL = process.env.ASSISTANT_MODEL || 'claude-opus-5-5';
-let clientPromise;
+const MODEL = config.anthropic.model;
+let client;
 
 async function getClient() {
-  if (!clientPromise) {
-    clientPromise = (async () => {
-      let apiKey = process.env.ANTHROPIC_API_KEY;
-      if (!apiKey && process.env.ANTHROPIC_SECRET_ARN) {
-        const { getSecretJson } = require('./aws');
-        const s = await getSecretJson(process.env.ANTHROPIC_SECRET_ARN);
-        apiKey = s.apiKey || s.ANTHROPIC_API_KEY;
-      }
-      if (!apiKey) return null;
-      // API Gateway caps requests at 30 s: one bounded attempt plus one retry.
-      return new Anthropic({ apiKey, timeout: 12000, maxRetries: 1 });
-    })();
-    clientPromise.catch(() => {
-      clientPromise = undefined;
-    });
+  if (client === undefined) {
+    // One bounded attempt plus one retry keeps the request under typical proxy timeouts.
+    client = config.anthropic.apiKey ? new Anthropic({ apiKey: config.anthropic.apiKey, timeout: 20000, maxRetries: 1 }) : null;
   }
-  return clientPromise;
+  return client;
 }
 
 module.exports = { MODEL, getClient, Anthropic };

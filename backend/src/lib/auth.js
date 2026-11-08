@@ -1,39 +1,62 @@
 'use strict';
-// Identity from the API Gateway Cognito JWT authorizer + app_users status.
-// app_users rows are provisioned by the Cognito PostAuthentication trigger.
-const db = require('./db');
+// Request identity. The app middleware verifies `Authorization: Bearer <access JWT>`
+// into req.authClaims (or req.authError); these helpers load the user and enforce status.
+//
+//   const user = await requireUser(req);                       // 401/403 when not allowed
+//   const user = await requireUser(req, { allowSuspended: true });
+//   assertCanAct(user, 'join'); assertAdult(user); assertProfile(user);
+//   const admin = await requireAdmin(req, 'admin');           // 'moderator' (default) | 'admin'
 const { err } = require('./http');
+const { verifyAccessToken } = require('./tokens');
 
-function claims(event) {
-  const a = event && event.requestContext && event.requestContext.authorizer;
-  return (a && a.jwt && a.jwt.claims) || (a && a.lambda) || (a && a.claims) || null;
+function bearer(req) {
+  const h = (req.headers && (req.headers.authorization || req.headers.Authorization)) || '';
+  const m = /^Bearer\s+(.+)$/i.exec(String(h));
+  return m ? m[1].trim() : null;
 }
 
-// HTTP API stringifies array claims, e.g. "[admins moderators]".
-function groupsFrom(c) {
-  const g = c && c['cognito:groups'];
-  if (!g) return [];
-  if (Array.isArray(g)) return g;
-  return String(g).replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
+// Returns verified claims or throws 401.
+function claims(req) {
+  if (req.authClaims) return req.authClaims;
+  if (req.authError) throw req.authError;
+  const token = bearer(req);
+  if (!token) throw err.unauthorized('unauthorized', 'Sign in to continue.');
+  req.authClaims = verifyAccessToken(token);
+  return req.authClaims;
 }
 
-async function requireUser(req, { allowSuspended = false, client } = {}) {
-  const c = claims(req.event);
-  if (!c || !c.sub) throw err.unauthorized();
-  const q = client || db;
-  const { rows } = await q.query(
-    `SELECT u.id, u.status, u.status_until, u.age_verified, u.phone_e164, p.display_name, p.visibility
-       FROM app_users u LEFT JOIN profiles p ON p.user_id = u.id
-      WHERE u.cognito_sub = $1`,
-    [c.sub]
-  );
-  const u = rows[0];
-  if (!u) throw err.unauthorized('user_not_provisioned', 'Sign in again to finish setting up your account');
+function toUser(u) {
+  const roles = u.roles || [];
+  return {
+    id: u._id,
+    sub: u._id,
+    status: u.status,
+    statusUntil: u.statusUntil || null,
+    ageVerified: !!u.ageVerified,
+    displayName: (u.profile && u.profile.displayName) || null,
+    hasProfile: !!(u.profile && u.profile.displayName),
+    visibility: (u.profile && u.profile.visibility) || 'discoverable',
+    roles,
+    groups: roles, // legacy alias (cognito:groups)
+  };
+}
+
+async function requireUser(req, { allowSuspended = false, session } = {}) {
+  if (req.user && req.user.id && (allowSuspended || req.user.status !== 'suspended')) return req.user;
+  const c = claims(req);
+  const { User } = require('../models');
+  const q = User.findById(c.sub).select('status statusUntil ageVerified roles profile.displayName profile.visibility lastActiveAt');
+  if (session) q.session(session);
+  const u = await q.lean();
+  if (!u) throw err.unauthorized('user_not_found', 'Sign in again.');
   if (u.status === 'deleted') throw err.forbidden('account_deleted', 'This account is pending deletion');
   if (u.status === 'suspended' && !allowSuspended) throw err.forbidden('account_suspended', 'This account is suspended. You can still view case status and appeal.');
   // Activity signal for KPIs (WAU), written at most hourly per user.
-  await q.query("UPDATE app_users SET last_active_at = now() WHERE id = $1 AND (last_active_at IS NULL OR last_active_at < now() - interval '1 hour')", [u.id]).catch(() => {});
-  return { id: u.id, sub: c.sub, status: u.status, ageVerified: u.age_verified, displayName: u.display_name, hasProfile: !!u.display_name, groups: groupsFrom(c) };
+  if (!u.lastActiveAt || Date.now() - new Date(u.lastActiveAt).getTime() > 3600000) {
+    User.updateOne({ _id: u._id }, { $set: { lastActiveAt: new Date() } }).catch(() => {});
+  }
+  req.user = toUser(u);
+  return req.user;
 }
 
 // Limited accounts keep safety tools but cannot create, join, message or start circles.
@@ -51,30 +74,28 @@ function assertProfile(user) {
   if (!user.hasProfile) throw err.forbidden('profile_required', 'Finish your profile first.');
 }
 
-const ADMIN_RANK = { viewer: 0, support: 1, moderator: 2, admin: 3 };
+const ADMIN_RANK = { moderator: 2, admin: 3 };
 
-// Admin web uses the separate admin user pool (MFA required). Cognito groups:
-//   admin     → everything
-//   moderator → reports, activities, users, audit
-// The admin_users row is upserted from the token so audit_events can reference it;
-// deactivating that row (active = false) revokes access even if the token is valid.
-async function requireAdmin(req, minRole = 'moderator') {
-  const c = claims(req.event);
-  if (!c || !c.sub) throw err.unauthorized();
-  const groups = groupsFrom(c);
-  const role = groups.includes('admin') ? 'admin' : groups.includes('moderator') ? 'moderator' : null;
-  if (!role) throw err.forbidden('admin_only');
-  if (ADMIN_RANK[role] < ADMIN_RANK[minRole]) throw err.forbidden('insufficient_role', `Requires ${minRole}`);
-  const email = c.email || `${c.username || c['cognito:username'] || c.sub}@admin.irl`;
-  const { rows } = await db.query(
-    `INSERT INTO admin_users (cognito_sub, email, display_name, role) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (cognito_sub) DO UPDATE SET role = EXCLUDED.role
-     RETURNING id, email, display_name, role, active`,
-    [c.sub, email, c.name || c.username || email, role]
-  );
-  const a = rows[0];
-  if (!a.active) throw err.forbidden('admin_disabled');
-  return a;
+function roleOf(roles = []) {
+  if (roles.includes('admin')) return 'admin';
+  if (roles.includes('moderator')) return 'moderator';
+  return null;
 }
 
-module.exports = { claims, groupsFrom, requireUser, assertCanAct, assertAdult, assertProfile, requireAdmin, ADMIN_RANK };
+// Admin console access is a role on the user (granted with scripts/grant-role.js):
+//   admin     → everything
+//   moderator → reports, activities, users, audit
+// Roles are re-read from the database on every call, so revoking a role takes effect immediately.
+async function requireAdmin(req, minRole = 'moderator') {
+  const c = claims(req);
+  const { User } = require('../models');
+  const u = await User.findById(c.sub).select('status roles phone profile.displayName').lean();
+  if (!u || u.status === 'deleted' || u.status === 'suspended') throw err.forbidden('admin_disabled');
+  const role = roleOf(u.roles);
+  if (!role) throw err.forbidden('admin_only');
+  if ((ADMIN_RANK[role] || 0) < (ADMIN_RANK[minRole] || 0)) throw err.forbidden('insufficient_role', `Requires ${minRole}`);
+  const name = (u.profile && u.profile.displayName) || 'Admin';
+  return { id: u._id, userId: u._id, role, name, displayName: name, display_name: name, phone: u.phone, email: null, active: true };
+}
+
+module.exports = { bearer, claims, toUser, requireUser, assertCanAct, assertAdult, assertProfile, requireAdmin, roleOf, ADMIN_RANK };

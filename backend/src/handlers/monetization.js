@@ -3,92 +3,129 @@
 // server-side, entitlements server-owned) and the business hub (venue
 // onboarding, labelled sponsored campaigns, analytics, Razorpay invoices for
 // the Venue/Club plan). No wallet, no stored balances, no custody.
-const { createRouter, err, created } = require('../lib/http');
+//
+// GET /v1/venues and GET /v1/venues/{venueId} live in handlers/discovery.js.
+const { err, created } = require('../lib/http');
 const { check } = require('../lib/validate');
 const db = require('../lib/db');
 const { requireUser, assertAdult } = require('../lib/auth');
 const { audit } = require('../lib/audit');
 const ent = require('../lib/entitlements');
 const media = require('../lib/media');
+const geo = require('../lib/geo');
 const { withIdempotency } = require('../lib/idempotency');
-const appstore = require('../lib/payments/appstore');
-const playstore = require('../lib/payments/playstore');
 const razorpay = require('../lib/payments/razorpay');
-const P = require('../lib/present');
+const config = require('../config');
+const billing = require('../services/billing');
 
-const VENUE_PLAN_INR = () => Number(process.env.VENUE_PLAN_PRICE_INR || 999);
+const SPONSOR_DISCLOSURE = 'Sponsored plans are always labelled "Sponsored" and never outrank relevance or bypass safety checks. We do not guarantee attendance.';
+const IST_OFFSET_MS = 330 * 60000;
+const VERIFICATION_TO_STATUS = { pending: 'in_review', verified: 'verified', rejected: 'rejected', suspended: 'suspended' };
 
-async function subscriptionOf(userId) {
-  const [ents, sub] = await Promise.all([ent.getActive(db, userId), db.one('SELECT store, status, expires_at FROM subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1', [userId])]);
-  return P.subscription(ents, sub);
+// ----- presenters -----
+function presentVenue(v, { business = null, sponsored = false, distanceM = null } = {}) {
+  return {
+    id: v._id,
+    name: v.name,
+    area: v.area || null,
+    address: v.address || null,
+    venueType: v.venueType || null,
+    categories: v.categorySlugs || [],
+    description: v.description || null,
+    offers: v.offers || [],
+    bookingUrl: v.bookingUrl || null,
+    verified: !!v.verified,
+    sponsored: !!sponsored,
+    latitude: v.latitude, // venues are public businesses; the exact location is intended
+    longitude: v.longitude,
+    distanceM: distanceM != null ? geo.coarseDistanceMeters(Number(distanceM)) : null,
+    business: business ? { id: business._id, name: business.name, verified: business.verificationStatus === 'verified' } : null,
+  };
 }
 
-function storeError(e) {
-  if (e && /not_configured$/.test(e.code || '')) return err.unavailable('billing_not_configured', 'Store billing is not configured on the server yet');
-  return e;
+const presentBusiness = (b, role) => ({ id: b._id, name: b.name, kind: b.kind, verificationStatus: b.verificationStatus, role: role || 'owner', createdAt: b.createdAt });
+
+function presentCampaign(c, metrics) {
+  return {
+    id: c._id,
+    businessId: c.businessId,
+    activityId: c.activityId || null,
+    title: c.title,
+    audience: c.audience || {},
+    budgetMinor: Number(c.budgetMinor),
+    spentMinor: Number(c.spentMinor || 0),
+    currency: c.currency,
+    startsAt: c.startsAt,
+    endsAt: c.endsAt,
+    status: c.status,
+    label: c.label || 'Sponsored',
+    metrics: metrics ? { impressions: metrics.impressions || 0, clicks: metrics.clicks || 0, joinRequests: metrics.joinRequests || 0, checkIns: metrics.checkIns || 0 } : undefined,
+  };
 }
 
-// Upsert a verified store purchase and derive the entitlement.
-async function applyPurchase(client, userId, p) {
-  const owner = await client.query('SELECT user_id FROM subscriptions WHERE original_transaction_id = $1 AND store = $2 LIMIT 1', [p.originalTransactionId, p.store]);
-  if (owner.rows[0] && owner.rows[0].user_id !== userId) throw err.conflict('purchase_belongs_to_another_account', 'This purchase is linked to a different account');
-  const active = p.store === 'google' ? p.active : !p.revoked && (!p.expiresAt || new Date(p.expiresAt) > new Date());
-  const entitlement = ent.productToEntitlement(p.productId);
-  await client.query(
-    `INSERT INTO subscriptions (user_id, store, product_id, status, started_at, expires_at, store_transaction_id, original_transaction_id, raw_status, updated_at)
-     VALUES ($1, $2, $3, $4, now(), $5, $6, $7, $8, now())
-     ON CONFLICT (store_transaction_id) DO UPDATE SET status = EXCLUDED.status, expires_at = EXCLUDED.expires_at, raw_status = EXCLUDED.raw_status, updated_at = now()`,
-    [userId, p.store, p.productId, active ? 'active' : p.revoked ? 'revoked' : 'expired', p.expiresAt, p.transactionId, p.originalTransactionId, JSON.stringify(p.raw || {})]
-  );
-  if (entitlement) {
-    if (active) await ent.grant(client, { userId, entitlement, source: p.store, sourceRef: p.originalTransactionId, expiresAt: p.expiresAt });
-    else await ent.revoke(client, { userId, entitlement, sourceRef: p.originalTransactionId });
-  }
-  await audit(client, { actorUserId: userId, action: 'subscription.verify', targetType: 'subscription', targetId: p.transactionId, metadata: { store: p.store, productId: p.productId, active } });
-  return active;
-}
-
-async function verifyOne(userId, { store, transactionId, purchaseToken }) {
-  let p;
+// Activity presentation belongs to the activities port (lib/present.activity or
+// services/activities.present). Fall back to a compact public summary until it exists.
+async function presentPlans(rows, viewerId) {
+  let fn = null;
   try {
-    if (store === 'apple') p = await appstore.getTransaction(transactionId);
-    else p = await playstore.getSubscription(purchaseToken);
+    const P = require('../lib/present');
+    if (typeof P.activity === 'function') fn = (a) => P.activity(a, { viewerId });
   } catch (e) {
-    throw storeError(e);
+    fn = null;
   }
-  if (!p) throw err.notFound('purchase_not_found');
-  // Bind purchases to accounts: clients pass the user id as appAccountToken / obfuscatedExternalAccountId.
-  const bound = store === 'apple' ? p.raw.appAccountToken : p.raw.externalAccountIdentifiers && p.raw.externalAccountIdentifiers.obfuscatedExternalAccountId;
-  if (bound && bound !== userId) throw err.conflict('purchase_belongs_to_another_account');
-  await db.withTransaction((client) => applyPurchase(client, userId, p));
-  if (store === 'google' && p.needsAcknowledge) await playstore.acknowledge(p.productId, purchaseToken).catch(() => {});
+  if (!fn) {
+    try {
+      const A = require('../services/activities');
+      if (typeof A.present === 'function') fn = (a) => A.present(a, { viewerId });
+    } catch (e) {
+      fn = null;
+    }
+  }
+  if (!fn) {
+    fn = (a) => ({
+      id: a._id,
+      title: a.title,
+      category: a.category,
+      startsAt: a.startsAt,
+      endsAt: a.endsAt,
+      capacity: a.capacity,
+      joinedCount: a.acceptedCount || 0,
+      area: a.coarseArea || null,
+      venueName: null,
+      venueId: a.venueId || null,
+      status: a.status,
+      sponsored: !!a.sponsoredCampaignId,
+    });
+  }
+  return Promise.all(rows.map((a) => fn(a)));
 }
 
+// ----- helpers -----
+// The user's business (as staff). Throws 403 no_business.
 async function myBusiness(userId, businessId) {
-  const b = await db.one(
-    `SELECT b.*, s.role FROM business_profiles b JOIN business_staff s ON s.business_id = b.id AND s.user_id = $1 WHERE ($2::uuid IS NULL OR b.id = $2) ORDER BY b.created_at LIMIT 1`,
-    [userId, businessId || null]
-  );
+  const { BusinessProfile } = require('../models');
+  const filter = { 'staff.userId': String(userId) };
+  if (businessId) filter._id = String(businessId);
+  const b = await BusinessProfile.findOne(filter).sort({ createdAt: 1 }).lean();
   if (!b) throw err.forbidden('no_business', 'Set up a business profile first');
-  return b;
+  const role = ((b.staff || []).find((s) => s.userId === userId) || {}).role || 'staff';
+  return { ...b, role };
 }
 
-const presentBusiness = (b) => ({ id: b.id, name: b.name, kind: b.kind, verificationStatus: b.verification_status, role: b.role || 'owner', createdAt: b.created_at });
-const presentCampaign = (c) => ({
-  id: c.id,
-  businessId: c.business_id,
-  activityId: c.activity_id,
-  title: c.title,
-  audience: c.audience,
-  budgetMinor: Number(c.budget_minor),
-  spentMinor: Number(c.spent_minor || 0),
-  currency: c.currency,
-  startsAt: c.starts_at,
-  endsAt: c.ends_at,
-  status: c.status,
-  label: c.label,
-  metrics: c.impressions != null ? { impressions: c.impressions, clicks: c.clicks, joinRequests: c.join_requests, checkIns: c.check_ins } : undefined,
-});
+// Plans at a venue: pinned by venueId, or legacy plans that name the venue in the same area.
+const plansAtVenue = (v) => ({ $or: [{ venueId: v._id }, { venueId: null, venueName: v.name, coarseArea: v.area }] });
+
+const istDay = (d) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+
+// IST day strings for a window of `days` days ending today (IST), plus UTC bounds.
+function windowOf(days, endOffsetDays = 0) {
+  const nowIst = new Date(Date.now() + IST_OFFSET_MS);
+  const startUtcMidnight = Date.UTC(nowIst.getUTCFullYear(), nowIst.getUTCMonth(), nowIst.getUTCDate() - (days - 1) - endOffsetDays);
+  const list = Array.from({ length: days }, (_, i) => new Date(startUtcMidnight + i * 86400000).toISOString().slice(0, 10));
+  const from = new Date(startUtcMidnight - IST_OFFSET_MS);
+  const to = new Date(from.getTime() + days * 86400000);
+  return { days: list, from, to };
+}
 
 const routes = {
   'GET /v1/plans': async (req) => {
@@ -109,7 +146,7 @@ const routes = {
 
   'GET /v1/me/subscription': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
-    return subscriptionOf(user.id);
+    return billing.subscriptionOf(user.id);
   },
 
   'POST /v1/subscriptions/receipt/verify': async (req) => {
@@ -125,9 +162,9 @@ const routes = {
     );
     if (v.store === 'apple' && !v.transactionId) throw err.badRequest('transaction_id_required');
     if (v.store === 'google' && !v.purchaseToken) throw err.badRequest('purchase_token_required');
-    return withIdempotency(db, req, user.id, async () => {
-      await verifyOne(user.id, v);
-      return subscriptionOf(user.id);
+    return withIdempotency(req, user.id, async () => {
+      await billing.verifyOne(user.id, v);
+      return billing.subscriptionOf(user.id);
     });
   },
 
@@ -141,17 +178,18 @@ const routes = {
       req.body
     );
     const results = [];
-    for (const id of (v.apple && v.apple.transactionIds) || []) results.push(await verifyOne(user.id, { store: 'apple', transactionId: id }).then(() => 'ok', (e) => e.code || 'error'));
-    for (const t of (v.google && v.google.purchaseTokens) || []) results.push(await verifyOne(user.id, { store: 'google', purchaseToken: t }).then(() => 'ok', (e) => e.code || 'error'));
-    return { ...(await subscriptionOf(user.id)), restored: results.filter((r) => r === 'ok').length, failed: results.filter((r) => r !== 'ok') };
+    for (const id of (v.apple && v.apple.transactionIds) || []) results.push(await billing.verifyOne(user.id, { store: 'apple', transactionId: id }).then(() => 'ok', (e) => e.code || 'error'));
+    for (const t of (v.google && v.google.purchaseTokens) || []) results.push(await billing.verifyOne(user.id, { store: 'google', purchaseToken: t }).then(() => 'ok', (e) => e.code || 'error'));
+    return { ...(await billing.subscriptionOf(user.id)), restored: results.filter((r) => r === 'ok').length, failed: results.filter((r) => r !== 'ok') };
   },
 
   // ----- business hub -----
   'POST /v1/business/venues': async (req) => {
+    const { BusinessProfile, Venue } = require('../models');
     const user = await requireUser(req);
     assertAdult(user);
     const body = req.body || {};
-    const contactIn = body.contact || {};
+    const contactIn = body.contact && typeof body.contact === 'object' ? body.contact : {};
     const v = check(
       {
         businessName: { type: 'string', required: true, min: 2, max: 80 },
@@ -184,52 +222,113 @@ const routes = {
         contactEmail: body.contactEmail || contactIn.email,
         contactName: body.contactName || contactIn.name,
         contactPhone: body.contactPhone || contactIn.phone,
-        agreements: Array.isArray(body.agreements) ? Object.fromEntries(body.agreements.map((a) => [a, true])) : body.agreements,
+        agreements: Array.isArray(body.agreements) ? Object.fromEntries(body.agreements.filter((a) => typeof a === 'string').map((a) => [a, true])) : body.agreements,
       }
     );
     if (!v.agreements.terms) throw err.badRequest('terms_required', 'Accept the partner terms to continue');
     if (!media.isOwnedKey(v.proofKey, 'venue_proof', user.id)) throw err.badRequest('invalid_proof_key');
-    const existing = await db.one('SELECT 1 AS x FROM business_staff WHERE user_id = $1 LIMIT 1', [user.id]);
-    if (existing) throw err.conflict('already_onboarded', 'You already have a business profile');
-    const out = await db.withTransaction(async (client) => {
-      const { rows: b } = await client.query(
-        `INSERT INTO business_profiles (owner_user_id, name, kind, contact_email, contact_name, contact_phone, gstin, verification_doc_key, plan_id, agreements)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [user.id, v.businessName, v.kind, v.contactEmail, v.contactName || null, v.contactPhone || null, v.gstin || null, v.proofKey, v.planId, JSON.stringify({ ...v.agreements, acceptedAt: new Date().toISOString() })]
+    if (await BusinessProfile.exists({ 'staff.userId': user.id })) throw err.conflict('already_onboarded', 'You already have a business profile');
+    const out = await db.withTransaction(async (session) => {
+      const [b] = await BusinessProfile.create(
+        [
+          {
+            ownerUserId: user.id,
+            name: v.businessName,
+            kind: v.kind,
+            contactEmail: v.contactEmail,
+            contactName: v.contactName || null,
+            contactPhone: v.contactPhone || null,
+            gstin: v.gstin || null,
+            verificationDocKey: v.proofKey,
+            planId: v.planId,
+            agreements: { ...v.agreements, acceptedAt: new Date().toISOString() },
+            staff: [{ userId: user.id, role: 'owner' }],
+          },
+        ],
+        { session }
       );
-      await client.query("INSERT INTO business_staff (business_id, user_id, role) VALUES ($1, $2, 'owner')", [b[0].id, user.id]);
-      const { rows: ven } = await client.query(
-        `INSERT INTO venues (business_id, name, address, area, latitude, longitude, venue_type, category_slugs, booking_url, description, verified)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, FALSE) RETURNING id`,
-        [b[0].id, v.venue.name, v.venue.address, v.venue.area, v.venue.latitude, v.venue.longitude, v.venue.venueType, v.venue.categories, v.venue.bookingUrl || null, v.venue.description || null]
+      const [ven] = await Venue.create(
+        [
+          {
+            businessId: b._id,
+            name: v.venue.name,
+            address: v.venue.address,
+            area: v.venue.area,
+            latitude: v.venue.latitude,
+            longitude: v.venue.longitude,
+            venueType: v.venue.venueType,
+            categorySlugs: v.venue.categories,
+            bookingUrl: v.venue.bookingUrl || null,
+            description: v.venue.description || null,
+            verified: false,
+          },
+        ],
+        { session }
       );
-      await audit(client, { actorUserId: user.id, action: 'business.onboard', targetType: 'business', targetId: b[0].id, ip: req.ip });
-      return { business: presentBusiness({ ...b[0], role: 'owner' }), venueId: ven[0].id };
+      await audit({ actorUserId: user.id, action: 'business.onboard', targetType: 'business', targetId: b._id, ip: req.ip }, { session });
+      return { business: presentBusiness(b.toObject(), 'owner'), venueId: ven._id };
     });
     return created({ ...out, message: 'Thanks! We verify every venue before it appears in the app (usually 1–2 working days).' });
   },
 
-  'GET /v1/business/campaigns': async (req) => {
+  // The signed-in owner's/staff member's venue (business hub home).
+  'GET /v1/business/venues/me': async (req) => {
+    const { BusinessProfile, Venue, SponsoredCampaign, BusinessInvoice, Activity } = require('../models');
     const user = await requireUser(req);
-    const b = await myBusiness(user.id, req.query.businessId);
-    const rows = await db.many(
-      `SELECT c.*, m.impressions, m.clicks, m.join_requests, m.check_ins FROM sponsored_campaigns c
-         LEFT JOIN LATERAL (SELECT sum(impressions)::int AS impressions, sum(clicks)::int AS clicks, sum(join_requests)::int AS join_requests, sum(check_ins)::int AS check_ins
-                              FROM campaign_metrics WHERE campaign_id = c.id) m ON TRUE
-        WHERE c.business_id = $1 ORDER BY c.created_at DESC`,
-      [b.id]
-    );
-    return { business: presentBusiness(b), items: rows.map(presentCampaign), nextCursor: null };
+    const b = await BusinessProfile.findOne({ 'staff.userId': user.id }).sort({ createdAt: 1 }).lean();
+    const v = b && (await Venue.findOne({ businessId: b._id }).sort({ createdAt: 1 }).lean());
+    if (!b || !v) throw err.notFound('no_venue', 'Set up your venue first');
+    const role = ((b.staff || []).find((s) => s.userId === user.id) || {}).role || 'staff';
+    const where = plansAtVenue(v);
+    const [ents, sponsored, pendingInvoice, plans, planCount] = await Promise.all([
+      ent.getActive(b.ownerUserId),
+      SponsoredCampaign.exists({ businessId: b._id, status: 'active' }),
+      BusinessInvoice.exists({ businessId: b._id, status: 'created', createdAt: { $gt: new Date(Date.now() - 86400000) } }),
+      Activity.find({ ...where, status: { $in: ['open', 'full', 'in_progress'] }, endsAt: { $gt: new Date() } }).sort({ startsAt: 1 }).limit(10).lean(),
+      Activity.countDocuments({ ...where, status: { $ne: 'moderated' } }),
+    ]);
+    return {
+      ...presentVenue(v, { business: b, sponsored: !!sponsored }),
+      status: VERIFICATION_TO_STATUS[b.verificationStatus] || 'in_review',
+      planId: b.planId || 'venue',
+      planStatus: ents.includes('venue') ? 'active' : pendingInvoice ? 'payment_processing' : 'none',
+      reviewNote: b.reviewNote || null,
+      contact: { name: b.contactName || null, phone: b.contactPhone || null, email: b.contactEmail || null },
+      business: { id: b._id, name: b.name, kind: b.kind, role, verified: b.verificationStatus === 'verified' },
+      upcomingPlans: await presentPlans(plans, user.id),
+      planCount,
+      sponsorDisclosure: SPONSOR_DISCLOSURE,
+    };
+  },
+
+  'GET /v1/business/campaigns': async (req) => {
+    const { SponsoredCampaign, CampaignMetric } = require('../models');
+    const user = await requireUser(req);
+    const b = await myBusiness(user.id, typeof req.query.businessId === 'string' ? req.query.businessId : null);
+    const rows = await SponsoredCampaign.find({ businessId: b._id }).sort({ createdAt: -1 }).limit(200).lean();
+    const sums = rows.length
+      ? await CampaignMetric.aggregate([
+          { $match: { campaignId: { $in: rows.map((c) => c._id) } } },
+          { $group: { _id: '$campaignId', impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' }, joinRequests: { $sum: '$joinRequests' }, checkIns: { $sum: '$checkIns' } } },
+        ])
+      : [];
+    const byId = new Map(sums.map((m) => [m._id, m]));
+    return { business: presentBusiness(b, b.role), items: rows.map((c) => presentCampaign(c, byId.get(c._id) || {})), nextCursor: null };
   },
 
   'POST /v1/business/campaigns': async (req) => {
+    const { SponsoredCampaign, Activity } = require('../models');
     const user = await requireUser(req);
     const v = check(
       {
         businessId: { type: 'string', format: 'uuid' },
         activityId: { type: 'string', format: 'uuid' },
         title: { type: 'string', required: true, max: 80 },
-        audience: { type: 'object', fields: { areas: { type: 'array', max: 10, items: { type: 'string', max: 60 } }, categories: { type: 'array', max: 10, items: { type: 'string', format: 'slug' } } }, default: () => ({}) },
+        audience: {
+          type: 'object',
+          fields: { areas: { type: 'array', max: 10, items: { type: 'string', max: 60 } }, categories: { type: 'array', max: 10, items: { type: 'string', format: 'slug' } } },
+          default: () => ({}),
+        },
         budgetMinor: { type: 'integer', required: true, min: 10000, max: 100000000 },
         startsAt: { type: 'string', required: true, format: 'datetime' },
         endsAt: { type: 'string', required: true, format: 'datetime' },
@@ -237,148 +336,147 @@ const routes = {
       req.body
     );
     const b = await myBusiness(user.id, v.businessId);
-    if (b.verification_status !== 'verified') throw err.forbidden('business_not_verified');
+    if (b.verificationStatus !== 'verified') throw err.forbidden('business_not_verified');
     if (!['owner', 'manager'].includes(b.role)) throw err.forbidden('manager_only');
-    const owner = await db.one('SELECT owner_user_id FROM business_profiles WHERE id = $1', [b.id]);
-    if (!ent.hasFeature(await ent.getActive(db, owner.owner_user_id), 'sponsored_slots')) throw err.forbidden('venue_plan_required', 'Sponsored plans need an active Venue/Club plan');
+    if (!ent.hasFeature(await ent.getActive(b.ownerUserId), 'sponsored_slots')) throw err.forbidden('venue_plan_required', 'Sponsored plans need an active Venue/Club plan');
     if (new Date(v.endsAt) <= new Date(v.startsAt)) throw err.badRequest('invalid_dates');
     if (v.activityId) {
-      const a = await db.one("SELECT host_user_id FROM activities WHERE id = $1 AND status IN ('open','full')", [v.activityId]);
-      const staff = a && (await db.one('SELECT 1 AS ok FROM business_staff WHERE business_id = $1 AND user_id = $2', [b.id, a.host_user_id]));
-      if (!staff) throw err.forbidden('activity_not_owned', 'Sponsor plans hosted by your staff only');
+      const a = await Activity.findOne({ _id: v.activityId, status: { $in: ['open', 'full'] } }).select('hostUserId').lean();
+      const isStaff = a && (b.staff || []).some((s) => s.userId === a.hostUserId);
+      if (!isStaff) throw err.forbidden('activity_not_owned', 'Sponsor plans hosted by your staff only');
     }
-    const c = await db.withTransaction(async (client) => {
+    const c = await db.withTransaction(async (session) => {
       // Always labelled "Sponsored"; starts in review — never auto-published.
-      const { rows } = await client.query(
-        `INSERT INTO sponsored_campaigns (business_id, activity_id, title, audience, budget_minor, starts_at, ends_at, status, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_review', $8) RETURNING *`,
-        [b.id, v.activityId || null, v.title, JSON.stringify(v.audience), v.budgetMinor, v.startsAt, v.endsAt, user.id]
+      const [doc] = await SponsoredCampaign.create(
+        [
+          {
+            businessId: b._id,
+            activityId: v.activityId || null,
+            title: v.title,
+            audience: v.audience,
+            budgetMinor: v.budgetMinor,
+            startsAt: new Date(v.startsAt),
+            endsAt: new Date(v.endsAt),
+            status: 'pending_review',
+            label: 'Sponsored',
+            createdBy: user.id,
+          },
+        ],
+        { session }
       );
-      await audit(client, { actorUserId: user.id, action: 'campaign.create', targetType: 'campaign', targetId: rows[0].id, ip: req.ip });
-      return rows[0];
+      await audit({ actorUserId: user.id, action: 'campaign.create', targetType: 'campaign', targetId: doc._id, ip: req.ip }, { session });
+      return doc.toObject();
     });
     return created(presentCampaign(c));
   },
 
-  // The signed-in owner's/staff member's venue (business hub home).
-  'GET /v1/business/venues/me': async (req) => {
-    const user = await requireUser(req);
-    const v = await db.one(
-      `SELECT v.*, b.id AS business_id, b.name AS business_name, b.kind, b.verification_status, b.review_note, b.owner_user_id,
-              b.contact_name, b.contact_email, b.contact_phone, b.plan_id, s.role,
-              EXISTS (SELECT 1 FROM sponsored_campaigns sc WHERE sc.business_id = b.id AND sc.status = 'active') AS sponsored,
-              NULL::float8 AS distance_m
-         FROM business_staff s JOIN business_profiles b ON b.id = s.business_id
-         JOIN venues v ON v.business_id = b.id
-        WHERE s.user_id = $1 ORDER BY b.created_at, v.created_at LIMIT 1`,
-      [user.id]
-    );
-    if (!v) throw err.notFound('no_venue', 'Set up your venue first');
-    const [ents, pendingInvoice, plans, planCount] = await Promise.all([
-      ent.getActive(db, v.owner_user_id),
-      db.one("SELECT 1 AS x FROM business_invoices WHERE business_id = $1 AND status = 'created' AND created_at > now() - interval '1 day' LIMIT 1", [v.business_id]),
-      db.many(
-        `${require('../services/activities').SELECT} WHERE (a.venue_id = $2 OR (a.venue_id IS NULL AND a.venue_name = $3 AND a.coarse_area = $4))
-           AND a.status IN ('open','full','in_progress') AND a.ends_at > now() ORDER BY a.starts_at LIMIT 10`,
-        [user.id, v.id, v.name, v.area]
-      ),
-      db.one("SELECT count(*)::int AS n FROM activities a WHERE (a.venue_id = $1 OR (a.venue_id IS NULL AND a.venue_name = $2 AND a.coarse_area = $3)) AND a.status <> 'moderated'", [v.id, v.name, v.area]),
-    ]);
-    const A = require('../services/activities');
-    const { presentVenue } = require('./discovery');
-    const statusMap = { pending: 'in_review', verified: 'verified', rejected: 'rejected', suspended: 'suspended' };
-    return {
-      ...presentVenue(v),
-      status: statusMap[v.verification_status] || 'in_review',
-      planId: v.plan_id || 'venue',
-      planStatus: ents.includes('venue') ? 'active' : pendingInvoice ? 'payment_processing' : 'none',
-      reviewNote: v.review_note || null,
-      contact: { name: v.contact_name, phone: v.contact_phone, email: v.contact_email },
-      business: { id: v.business_id, name: v.business_name, kind: v.kind, role: v.role, verified: v.verification_status === 'verified' },
-      upcomingPlans: plans.map((r) => A.present(r, { viewerId: user.id })),
-      planCount: planCount.n,
-      sponsorDisclosure: 'Sponsored plans are always labelled "Sponsored" and never outrank relevance or bypass safety checks. We do not guarantee attendance.',
-    };
-  },
-
   'GET /v1/business/analytics': async (req) => {
+    const { Venue, Activity, ActivityDailyMetric, Participant, SponsoredCampaign, CampaignMetric } = require('../models');
     const user = await requireUser(req);
-    const q = check({ venueId: { type: 'string', format: 'uuid' }, range: { type: 'string', enum: ['7d', '30d', '90d'], default: '30d' } }, req.query);
-    const b = await myBusiness(user.id, req.query.businessId);
+    const q = check({ venueId: { type: 'string', format: 'uuid' }, businessId: { type: 'string', format: 'uuid' }, range: { type: 'string', enum: ['7d', '30d', '90d'], default: '30d' } }, req.query);
+    const b = await myBusiness(user.id, q.businessId);
     const days = parseInt(q.range, 10);
-    const venue = await db.one('SELECT id, name, area FROM venues WHERE business_id = $1 AND ($2::uuid IS NULL OR id = $2) ORDER BY created_at LIMIT 1', [b.id, q.venueId || null]);
+    const venue = await Venue.findOne({ businessId: b._id, ...(q.venueId ? { _id: q.venueId } : {}) }).sort({ createdAt: 1 }).lean();
     if (!venue) throw err.notFound('no_venue', 'Set up your venue first');
-    // Per-day series for plans at the venue + the business's sponsored campaigns (IST days).
-    const seriesSql = `
-      WITH d AS (SELECT generate_series($3::date, $3::date + ($4::int - 1), interval '1 day')::date AS day),
-      acts AS (SELECT a.id, a.host_user_id FROM activities a
-                WHERE a.venue_id = $2 OR (a.venue_id IS NULL AND a.venue_name = $5 AND a.coarse_area = $6))
-      SELECT d.day,
-        COALESCE((SELECT sum(m.views) FROM activity_daily_metrics m WHERE m.day = d.day AND m.activity_id IN (SELECT id FROM acts)), 0)::int AS plan_views,
-        (SELECT count(*) FROM activity_participants p JOIN acts ON acts.id = p.activity_id
-          WHERE p.user_id <> acts.host_user_id AND (p.requested_at AT TIME ZONE 'Asia/Kolkata')::date = d.day)::int AS joins,
-        (SELECT count(*) FROM activity_participants p JOIN acts ON acts.id = p.activity_id
-          WHERE p.checked_in_at IS NOT NULL AND (p.checked_in_at AT TIME ZONE 'Asia/Kolkata')::date = d.day)::int AS check_ins,
-        COALESCE((SELECT sum(cm.impressions) FROM campaign_metrics cm JOIN sponsored_campaigns sc ON sc.id = cm.campaign_id WHERE sc.business_id = $1 AND cm.day = d.day), 0)::int AS impressions,
-        COALESCE((SELECT sum(cm.clicks) FROM campaign_metrics cm JOIN sponsored_campaigns sc ON sc.id = cm.campaign_id WHERE sc.business_id = $1 AND cm.day = d.day), 0)::int AS clicks
-      FROM d ORDER BY d.day`;
-    const todayIst = new Date(Date.now() + 330 * 60000);
-    const start = new Date(Date.UTC(todayIst.getUTCFullYear(), todayIst.getUTCMonth(), todayIst.getUTCDate() - (days - 1)));
-    const prevStart = new Date(start.getTime() - days * 86400000);
-    const iso = (d) => d.toISOString().slice(0, 10);
-    const [cur, prev] = await Promise.all([
-      db.many(seriesSql, [b.id, venue.id, iso(start), days, venue.name, venue.area]),
-      db.many(seriesSql, [b.id, venue.id, iso(prevStart), days, venue.name, venue.area]),
+
+    const cur = windowOf(days);
+    const prev = windowOf(days, days);
+    const allDays = [...prev.days, ...cur.days];
+    const acts = await Activity.find(plansAtVenue(venue)).select('_id hostUserId').lean();
+    const actIds = acts.map((a) => a._id);
+    const hostOf = new Map(acts.map((a) => [a._id, a.hostUserId]));
+    const campaignIds = (await SponsoredCampaign.find({ businessId: b._id }).select('_id').lean()).map((c) => c._id);
+
+    const [views, parts, cm] = await Promise.all([
+      actIds.length
+        ? ActivityDailyMetric.aggregate([{ $match: { activityId: { $in: actIds }, day: { $in: allDays } } }, { $group: { _id: '$day', views: { $sum: '$views' } } }])
+        : [],
+      actIds.length
+        ? Participant.find({ activityId: { $in: actIds }, $or: [{ requestedAt: { $gte: prev.from, $lt: cur.to } }, { checkedInAt: { $gte: prev.from, $lt: cur.to } }] })
+            .select('activityId userId requestedAt checkedInAt')
+            .limit(100000)
+            .lean()
+        : [],
+      campaignIds.length
+        ? CampaignMetric.aggregate([{ $match: { campaignId: { $in: campaignIds }, day: { $in: allDays } } }, { $group: { _id: '$day', impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' } } }])
+        : [],
     ]);
-    const keys = { planViews: 'plan_views', joins: 'joins', checkIns: 'check_ins', impressions: 'impressions', clicks: 'clicks' };
-    const sum = (rows) => Object.fromEntries(Object.entries(keys).map(([k, col]) => [k, rows.reduce((n, r) => n + r[col], 0)]));
-    const dayIso = (r) => (r.day instanceof Date ? iso(r.day) : String(r.day).slice(0, 10));
+
+    const perDay = new Map(allDays.map((d) => [d, { planViews: 0, joins: 0, checkIns: 0, impressions: 0, clicks: 0 }]));
+    for (const r of views) if (perDay.has(r._id)) perDay.get(r._id).planViews += r.views;
+    for (const r of cm) {
+      if (!perDay.has(r._id)) continue;
+      perDay.get(r._id).impressions += r.impressions;
+      perDay.get(r._id).clicks += r.clicks;
+    }
+    for (const p of parts) {
+      if (p.requestedAt && p.userId !== hostOf.get(p.activityId)) {
+        const d = istDay(new Date(p.requestedAt));
+        if (perDay.has(d)) perDay.get(d).joins += 1;
+      }
+      if (p.checkedInAt) {
+        const d = istDay(new Date(p.checkedInAt));
+        if (perDay.has(d)) perDay.get(d).checkIns += 1;
+      }
+    }
+    const KEYS = ['planViews', 'joins', 'checkIns', 'impressions', 'clicks'];
+    const sum = (list) => Object.fromEntries(KEYS.map((k) => [k, list.reduce((n, d) => n + perDay.get(d)[k], 0)]));
     return {
       range: q.range,
-      venue: { id: venue.id, name: venue.name, area: venue.area },
-      days: cur.map(dayIso),
-      labels: cur.map((r) => new Date(`${dayIso(r)}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' })),
-      series: Object.fromEntries(Object.entries(keys).map(([k, col]) => [k, cur.map((r) => r[col])])),
-      totals: sum(cur),
-      previousTotals: sum(prev),
+      venue: { id: venue._id, name: venue.name, area: venue.area },
+      days: cur.days,
+      labels: cur.days.map((d) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' })),
+      series: Object.fromEntries(KEYS.map((k) => [k, cur.days.map((d) => perDay.get(d)[k])])),
+      totals: sum(cur.days),
+      previousTotals: sum(prev.days),
       note: 'Attributable actions only. We never guarantee attendance.',
     };
   },
 
   'POST /v1/business/payments/order': async (req) => {
+    const { BusinessInvoice } = require('../models');
     const user = await requireUser(req);
     const v = check({ businessId: { type: 'string', format: 'uuid' }, months: { type: 'integer', min: 1, max: 12, default: 1 } }, req.body);
     const b = await myBusiness(user.id, v.businessId);
     if (b.role !== 'owner') throw err.forbidden('owner_only');
-    return withIdempotency(db, req, user.id, async () => {
-      const amountMinor = VENUE_PLAN_INR() * 100 * v.months;
-      const inv = await db.one("INSERT INTO business_invoices (business_id, plan_code, amount_minor) VALUES ($1, $2, $3) RETURNING id", [b.id, `venue_${v.months}m`, amountMinor]);
+    return withIdempotency(req, user.id, async () => {
+      const amountMinor = config.razorpay.venuePlanPriceInr * 100 * v.months;
+      const inv = await BusinessInvoice.create({ businessId: b._id, planCode: `venue_${v.months}m`, amountMinor });
       let order;
       try {
-        order = await razorpay.createOrder({ amountMinor, receipt: inv.id, notes: { invoiceId: inv.id, businessId: b.id } });
+        order = await razorpay.createOrder({ amountMinor, receipt: inv._id, notes: { invoiceId: inv._id, businessId: b._id } });
       } catch (e) {
-        await db.query("UPDATE business_invoices SET status = 'failed' WHERE id = $1", [inv.id]);
+        await BusinessInvoice.updateOne({ _id: inv._id }, { $set: { status: 'failed' } });
         if (e.code === 'payments_not_configured') throw err.unavailable('payments_not_configured', 'Payments are not configured on the server yet');
         throw e;
       }
-      await db.query('UPDATE business_invoices SET razorpay_order_id = $2 WHERE id = $1', [inv.id, order.orderId]);
-      return created({ invoiceId: inv.id, orderId: order.orderId, amountMinor: order.amountMinor, currency: order.currency, keyId: order.keyId, description: `Project IRL Venue/Club plan · ${v.months} month(s)`, businessName: b.name });
+      await BusinessInvoice.updateOne({ _id: inv._id }, { $set: { razorpayOrderId: order.orderId } });
+      return created({
+        invoiceId: inv._id,
+        orderId: order.orderId,
+        amountMinor: order.amountMinor,
+        currency: order.currency,
+        keyId: order.keyId,
+        description: `Project IRL Venue/Club plan · ${v.months} month(s)`,
+        businessName: b.name,
+      });
     });
   },
 
   // Optional fast path after Razorpay Checkout returns; the webhook remains the source of truth.
   'POST /v1/business/payments/verify': async (req) => {
+    const { BusinessInvoice, BusinessProfile } = require('../models');
     const user = await requireUser(req);
     const v = check({ orderId: { type: 'string', required: true, max: 64 }, paymentId: { type: 'string', required: true, max: 64 }, signature: { type: 'string', required: true, max: 256 } }, req.body);
-    const inv = await db.one('SELECT i.* FROM business_invoices i JOIN business_staff s ON s.business_id = i.business_id AND s.user_id = $2 WHERE i.razorpay_order_id = $1', [v.orderId, user.id]);
-    if (!inv) throw err.notFound('invoice_not_found');
+    const inv = await BusinessInvoice.findOne({ razorpayOrderId: v.orderId }).lean();
+    const staff = inv && (await BusinessProfile.exists({ _id: inv.businessId, 'staff.userId': user.id }));
+    if (!inv || !staff) throw err.notFound('invoice_not_found');
     const { key_secret: keySecret } = await razorpay.secrets();
+    if (!keySecret) throw err.unavailable('payments_not_configured', 'Payments are not configured on the server yet');
     if (!razorpay.verifyPaymentSignature(v.orderId, v.paymentId, v.signature, keySecret)) throw err.badRequest('invalid_signature');
-    const { markInvoicePaid } = require('./webhooks');
-    await markInvoicePaid(inv.razorpay_order_id, v.paymentId);
-    return { status: 'paid', invoiceId: inv.id };
+    await billing.markInvoicePaid(inv.razorpayOrderId, v.paymentId);
+    return { status: 'paid', invoiceId: inv._id };
   },
 };
 
-exports.applyPurchase = applyPurchase;
-exports.handler = createRouter(routes);
+module.exports = { routes, presentVenue, presentCampaign, presentBusiness, applyPurchase: billing.applyPurchase };

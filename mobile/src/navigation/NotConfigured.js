@@ -14,12 +14,12 @@ export default function NotConfigured() {
         Connect a backend
       </AppText>
       <AppText align="center" color={colors.inkSoft} style={{ marginTop: space.xs }}>
-        Project IRL talks only to the real API. Deploy the backend, then generate the app config:
+        Project IRL talks only to the real API. Run the backend, then generate the app config:
       </AppText>
       <Card style={{ marginTop: space.lg, borderRadius: radius.quest }}>
-        <AppText variant="label">npm run configure -- --stack irl-prod --region ap-south-1</AppText>
+        <AppText variant="label">npm run configure -- --api https://your-api-host/v1</AppText>
         <AppText variant="caption" color={colors.muted} style={{ marginTop: space.xs }}>
-          Writes API_URL, WS_URL, AWS_REGION, COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID into src/config.env.json. Rebuild the app afterwards.
+          Writes API_URL and WS_URL into src/config.env.json. Rebuild the app afterwards.
         </AppText>
       </Card>
     </View>

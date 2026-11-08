@@ -1,5 +1,5 @@
 // Admin API client for the real backend (NEXT_PUBLIC_API_URL already ends in /v1).
-// - Authorization: Bearer <Cognito access token>, refreshed automatically.
+// - Authorization: Bearer <API access token>, refreshed (rotating) automatically.
 // - Errors are JSON { code, message, details? } -> thrown as ApiError.
 // - Lists use cursor pagination: { items, nextCursor }.
 // - Mutations send an Idempotency-Key (reused on the post-refresh retry).

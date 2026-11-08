@@ -1,83 +1,90 @@
 'use strict';
-// PostgreSQL via RDS Proxy. Credentials from Secrets Manager (DB_SECRET_ARN)
-// in AWS, or DATABASE_URL locally. Small pool per Lambda container — the proxy
-// does the multiplexing.
-const { Pool } = require('pg');
+// MongoDB connection (Mongoose) + transaction helper.
+//
+// withTransaction(fn): runs fn(session, after) inside a multi-document
+// transaction (requires a replica set — Atlas, or `rs0` in docker-compose).
+// Pass `{ session }` to every model call inside fn. `after(cb)` registers side
+// effects (realtime publish, job enqueue) that run only after COMMIT.
+// Transient errors are retried by the driver's withTransaction.
+const mongoose = require('mongoose');
+const config = require('../config');
+const logger = require('../logger');
 
-let poolPromise;
+// strictQuery drops filter paths that aren't in the schema. Never pass raw request
+// objects into filters: validate with lib/validate (types/enums) or String(...) values,
+// so a body like { "phone": { "$ne": null } } can't become a query operator.
+mongoose.set('strictQuery', true);
 
-async function resolveConfig() {
-  if (process.env.DATABASE_URL) {
-    return { connectionString: process.env.DATABASE_URL, ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined };
+let connecting = null;
+
+async function connect(uri = config.mongoUri, opts = {}) {
+  if (mongoose.connection.readyState === 1) return mongoose.connection;
+  if (!connecting) {
+    connecting = mongoose
+      .connect(uri, { serverSelectionTimeoutMS: 10000, maxPoolSize: Number(process.env.MONGO_POOL_MAX || 20), autoIndex: true, ...opts })
+      .then((m) => {
+        logger.info({ msg: 'mongo_connected', host: m.connection.host, db: m.connection.name });
+        return m.connection;
+      })
+      .catch((e) => {
+        connecting = null;
+        throw e;
+      });
   }
-  if (!process.env.DB_SECRET_ARN) throw new Error('DATABASE_URL or DB_SECRET_ARN must be set');
-  const { getSecretJson } = require('./aws');
-  const s = await getSecretJson(process.env.DB_SECRET_ARN);
-  return {
-    host: process.env.DB_PROXY_ENDPOINT || s.host,
-    port: Number(s.port || 5432),
-    user: s.username,
-    password: s.password,
-    database: process.env.DB_NAME || s.dbname || 'irl',
-    // RDS Proxy presents an Amazon-issued certificate trusted by Node's CA bundle.
-    ssl: { rejectUnauthorized: true },
-  };
+  return connecting;
 }
 
-function getPool() {
-  if (!poolPromise) {
-    poolPromise = resolveConfig().then((cfg) => {
-      const pool = new Pool({ ...cfg, max: Number(process.env.DB_POOL_MAX || 2), idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, statement_timeout: 10000 });
-      pool.on('error', (e) => console.error(JSON.stringify({ level: 'error', msg: 'pg_pool_error', error: e.message })));
-      return pool;
-    });
-    poolPromise.catch(() => {
-      poolPromise = undefined;
-    });
+async function disconnect() {
+  connecting = null;
+  await mongoose.disconnect();
+}
+
+async function ping() {
+  if (mongoose.connection.readyState !== 1) return false;
+  try {
+    await mongoose.connection.db.admin().ping();
+    return true;
+  } catch (e) {
+    return false;
   }
-  return poolPromise;
 }
 
-async function query(text, params) {
-  const pool = await getPool();
-  return pool.query(text, params);
+// Ensure every model's indexes exist (call once at boot / in tests).
+async function syncIndexes() {
+  const models = require('../models');
+  await Promise.all(Object.values(models).filter((m) => m && m.createIndexes).map((m) => m.createIndexes()));
 }
 
-async function one(text, params) {
-  const { rows } = await query(text, params);
-  return rows[0] || null;
-}
-
-async function many(text, params) {
-  const { rows } = await query(text, params);
-  return rows;
-}
-
-// Run fn(client, after) in a transaction. `after(cb)` registers side effects
-// (realtime publish, SQS enqueue) that run only after COMMIT succeeds.
 async function withTransaction(fn) {
-  const pool = await getPool();
-  const client = await pool.connect();
-  const afterCommit = [];
+  const session = await mongoose.startSession();
+  let afterCommit = [];
   let result;
   try {
-    await client.query('BEGIN');
-    result = await fn(client, (cb) => afterCommit.push(cb));
-    await client.query('COMMIT');
-  } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    client.release();
-    throw e;
+    await session.withTransaction(async () => {
+      afterCommit = []; // reset on driver retry
+      result = await fn(session, (cb) => afterCommit.push(cb));
+    });
+  } finally {
+    await session.endSession();
   }
-  client.release();
   for (const cb of afterCommit) {
     try {
       await cb();
     } catch (e) {
-      console.error(JSON.stringify({ level: 'error', msg: 'after_commit_failed', error: e.message }));
+      logger.error({ msg: 'after_commit_failed', err: e.message });
     }
   }
   return result;
 }
 
-module.exports = { getPool, query, one, many, withTransaction };
+// Whether the connected deployment supports transactions/change streams.
+async function isReplicaSet() {
+  try {
+    const hello = await mongoose.connection.db.admin().command({ hello: 1 });
+    return !!(hello.setName || hello.msg === 'isdbgrid');
+  } catch (e) {
+    return false;
+  }
+}
+
+module.exports = { mongoose, connect, disconnect, ping, syncIndexes, withTransaction, isReplicaSet };

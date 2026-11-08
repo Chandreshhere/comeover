@@ -1,8 +1,9 @@
 'use strict';
 // Apple App Store Server API (StoreKit 2) verification.
-// Credentials (TODO): APPLE_IAP_SECRET_ARN → { issuerId, keyId, privateKey (p8 PEM) },
+// Credentials: APPLE_IAP_ISSUER_ID, APPLE_IAP_KEY_ID, APPLE_IAP_PRIVATE_KEY (p8 PEM, \n-escaped),
 // APPLE_BUNDLE_ID, APPLE_ROOT_CA_G3_SHA256 (fingerprint of Apple Root CA - G3), APPLE_ENV=Production|Sandbox.
 const crypto = require('crypto');
+const config = require('../../config');
 
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
 const fromB64url = (s) => Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
@@ -15,7 +16,7 @@ function decodeJwsPayload(jws) {
 
 // Verify an Apple-signed JWS (signedPayload / signedTransactionInfo):
 // x5c chain leaf→intermediate→root, root pinned by SHA-256 fingerprint, ES256 signature.
-function verifyAppleJws(jws, rootFingerprint = process.env.APPLE_ROOT_CA_G3_SHA256) {
+function verifyAppleJws(jws, rootFingerprint = config.apple.rootCaG3Sha256) {
   if (!rootFingerprint) {
     const e = new Error('Apple root CA fingerprint not configured');
     e.code = 'apple_not_configured';
@@ -36,16 +37,9 @@ function verifyAppleJws(jws, rootFingerprint = process.env.APPLE_ROOT_CA_G3_SHA2
   return JSON.parse(fromB64url(p).toString('utf8'));
 }
 
-let credsPromise;
-async function creds() {
-  if (!credsPromise) {
-    credsPromise = (async () => {
-      if (!process.env.APPLE_IAP_SECRET_ARN) return null;
-      const { getSecretJson } = require('../aws');
-      return getSecretJson(process.env.APPLE_IAP_SECRET_ARN);
-    })();
-  }
-  return credsPromise;
+function creds() {
+  const { issuerId, keyId, privateKey } = config.apple;
+  return issuerId && keyId && privateKey ? { issuerId, keyId, privateKey } : null;
 }
 
 function apiJwt({ issuerId, keyId, privateKey }, bundleId, nowSec = Math.floor(Date.now() / 1000)) {
@@ -57,14 +51,14 @@ function apiJwt({ issuerId, keyId, privateKey }, bundleId, nowSec = Math.floor(D
 
 // Fetch a transaction directly from Apple and verify its signed payload.
 async function getTransaction(transactionId) {
-  const c = await creds();
-  const bundleId = process.env.APPLE_BUNDLE_ID;
+  const c = creds();
+  const bundleId = config.apple.bundleId;
   if (!c || !bundleId) {
     const e = new Error('App Store Server API not configured');
     e.code = 'apple_not_configured';
     throw e;
   }
-  const host = process.env.APPLE_ENV === 'Production' ? 'https://api.storekit.itunes.apple.com' : 'https://api.storekit-sandbox.itunes.apple.com';
+  const host = config.apple.environment === 'Production' ? 'https://api.storekit.itunes.apple.com' : 'https://api.storekit-sandbox.itunes.apple.com';
   const res = await fetch(`${host}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`, { headers: { authorization: `Bearer ${apiJwt(c, bundleId)}` } });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`apple api ${res.status}`);

@@ -148,7 +148,7 @@ export function NoAccess({ what, role }) {
         <h2 className="h2">No access</h2>
       </div>
       <p className="soft">
-        {what} is available to the <b>admin</b> Cognito group{role ? ` — you are signed in as ${role}` : ''}. Ask an admin if you need access.
+        {what} is available to the <b>admin</b> role{role ? ` — you are signed in as ${role}` : ''}. Ask an admin if you need access.
       </p>
     </div>
   );
@@ -163,7 +163,7 @@ export function ConfigRequired() {
           <h1 className="h1">Configuration required</h1>
         </div>
         <p className="soft">
-          The admin console talks only to the real backend and Cognito. Set these variables in <span className="mono">.env.local</span> (see <span className="mono">.env.example</span>), then rebuild — Next.js inlines <span className="mono">NEXT_PUBLIC_*</span> values at build time.
+          The admin console talks only to the real Project IRL API. Set these variables in <span className="mono">.env.local</span> (see <span className="mono">.env.example</span>), then rebuild — Next.js inlines <span className="mono">NEXT_PUBLIC_*</span> values at build time.
         </p>
         <div className="table-wrap">
           <table className="table">

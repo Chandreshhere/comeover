@@ -1,6 +1,15 @@
 'use strict';
-// HTTP helpers for API Gateway HTTP API (payload v2) Lambda proxies:
-// errors, JSON responses, body parsing and a tiny routeKey router.
+// HTTP helpers shared by every handler module. The handler convention is the
+// same as the legacy Lambda code so handlers port mechanically:
+//
+//   module.exports.routes = { 'GET /v1/things/{id}': async (req) => result }
+//
+// `req` = { params, query, headers, ip, requestId, body, rawBody(), user, authClaims, method, path }
+//   - return a plain value      → 200 JSON
+//   - return json(status, body) → passed through ({ statusCode, body, headers })
+//   - throw err.*               → mapped JSON error { code, message, details? }
+const config = require('../config');
+const logger = require('../logger');
 
 class HttpError extends Error {
   constructor(status, code, message, details) {
@@ -29,130 +38,93 @@ const err = {
 const BASE_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 
 function json(statusCode, body, headers) {
-  return {
-    statusCode,
-    headers: { ...BASE_HEADERS, ...(headers || {}) },
-    body: body === undefined ? '' : JSON.stringify(body),
-  };
+  return { statusCode, headers: { ...BASE_HEADERS, ...(headers || {}) }, body: body === undefined ? '' : JSON.stringify(body) };
 }
 const ok = (body) => json(200, body);
 const created = (body) => json(201, body);
 const noContent = () => ({ statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' });
 
-function rawBody(event) {
-  if (!event || event.body == null) return '';
-  return event.isBase64Encoded ? Buffer.from(event.body, 'base64').toString('utf8') : String(event.body);
-}
-
-function parseBody(event) {
-  const raw = rawBody(event);
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== 'object') throw new Error('not an object');
-    return parsed;
-  } catch (e) {
-    throw err.badRequest('invalid_json', 'Request body must be a JSON object');
-  }
-}
-
-function header(event, name) {
-  const h = (event && event.headers) || {};
+function header(req, name) {
+  const h = (req && req.headers) || {};
   const want = name.toLowerCase();
   for (const k of Object.keys(h)) if (k.toLowerCase() === want) return h[k];
   return undefined;
 }
 
-// Map Postgres and unknown errors to safe API responses.
-function mapError(e, event) {
+const isTransient = (e) => !!(e && (e.hasErrorLabel?.('TransientTransactionError') || (Array.isArray(e.errorLabels) && e.errorLabels.includes('TransientTransactionError')) || e.code === 112));
+
+// Map our errors, Mongo/Mongoose errors and unknown errors to safe API responses.
+function mapError(e, ctx = {}) {
   if (e instanceof HttpError) {
     const headers = e.retryAfterSec ? { 'retry-after': String(e.retryAfterSec) } : undefined;
     return json(e.status, { code: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) }, headers);
   }
-  switch (e && e.code) {
-    case '23505':
-      return json(409, { code: 'conflict', message: 'That already exists.' });
-    case '23503':
-      return json(409, { code: 'reference_conflict', message: 'A referenced record does not exist.' });
-    case '23514':
-    case '22P02':
-    case '22007':
-    case '22003':
-      return json(400, { code: 'invalid_value', message: 'One of the values is not allowed.' });
-    case '40001':
-    case '40P01':
-      return json(409, { code: 'retry', message: 'Please retry.' });
-    default:
-      // eslint-disable-next-line no-console
-      console.error(JSON.stringify({ level: 'error', msg: 'unhandled', routeKey: event && event.routeKey, error: e && e.message, stack: e && e.stack }));
-      return json(500, { code: 'internal', message: 'Something went wrong.' });
+  if (e && (e.code === 11000 || e.code === 11001)) return json(409, { code: 'conflict', message: 'That already exists.' });
+  if (e && (e.name === 'CastError' || e.name === 'ValidationError' || e.name === 'StrictModeError')) {
+    return json(400, { code: 'invalid_value', message: 'One of the values is not allowed.' });
   }
+  if (isTransient(e) || (e && e.code === 251)) return json(409, { code: 'retry', message: 'Please retry.' });
+  logger.error({ msg: 'unhandled', route: ctx.route, err: e && e.message, stack: e && e.stack });
+  return json(500, { code: 'internal', message: 'Something went wrong.' });
 }
 
-function compile(routeKey) {
+// "GET /v1/activities/{activityId}" → { method, expressPath: '/v1/activities/:activityId' }
+function compileRouteKey(routeKey) {
   const [method, path] = routeKey.split(' ');
-  const names = [];
-  const re = new RegExp(
-    '^' +
-      path.replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\{(\w+)\}/g, (_, n) => {
-        names.push(n);
-        return '([^/]+)';
-      }) +
-      '/?$'
-  );
-  return { method, re, names };
+  if (!method || !path) throw new Error(`bad route key "${routeKey}"`);
+  return { method: method.toUpperCase(), expressPath: path.replace(/\{(\w+)\}/g, ':$1') };
 }
 
-// Router keyed by API Gateway routeKey ("GET /v1/activities/{activityId}").
-// Falls back to method+path matching so handlers also work in local tests.
-function createRouter(routes) {
-  const compiled = Object.entries(routes).map(([key, fn]) => ({ key, fn, ...compile(key) }));
-  const handler = async (event, context) => {
-    if (context) context.callbackWaitsForEmptyEventLoop = false;
-    let entry = compiled.find((r) => r.key === event.routeKey);
-    let params = { ...(event.pathParameters || {}) };
-    if (!entry) {
-      const method = (event.requestContext && event.requestContext.http && event.requestContext.http.method) || event.httpMethod;
-      const path = event.rawPath || event.path || '';
-      for (const r of compiled) {
-        if (r.method !== method) continue;
-        const m = path.match(r.re);
-        if (m) {
-          entry = r;
-          r.names.forEach((n, i) => (params[n] = decodeURIComponent(m[i + 1])));
-          break;
-        }
-      }
-    }
-    if (!entry) return json(404, { code: 'route_not_found' });
-    // Global maintenance switch (Lambda env MAINTENANCE_MODE=true). Admin and webhooks stay up.
-    if (process.env.MAINTENANCE_MODE === 'true' && !/ \/v1\/(admin|webhooks)\//.test(entry.key)) {
-      return json(503, { code: 'maintenance', message: process.env.MAINTENANCE_MESSAGE || "We're doing a quick tune-up. Back shortly." }, { 'retry-after': '300' });
-    }
-    let bodyCache;
-    const req = {
-      event,
-      params,
-      query: event.queryStringParameters || {},
-      headers: event.headers || {},
-      ip: (event.requestContext && event.requestContext.http && event.requestContext.http.sourceIp) || null,
-      requestId: (event.requestContext && event.requestContext.requestId) || null,
-      get body() {
-        if (bodyCache === undefined) bodyCache = parseBody(event);
-        return bodyCache;
-      },
-      rawBody: () => rawBody(event),
-    };
-    try {
-      const res = await entry.fn(req);
-      if (res && typeof res.statusCode === 'number') return res;
-      return ok(res === undefined ? { ok: true } : res);
-    } catch (e) {
-      return mapError(e, event);
-    }
+const MAINTENANCE_EXEMPT = /^\/v1\/(admin|webhooks|auth)\//;
+
+function buildReq(r) {
+  return {
+    method: r.method,
+    path: r.path,
+    params: { ...r.params },
+    query: r.query || {},
+    headers: r.headers || {},
+    ip: r.ip || null,
+    requestId: r.id || null,
+    body: r.body && typeof r.body === 'object' && !Buffer.isBuffer(r.body) ? r.body : {},
+    rawBody: () => (r.rawBody ? r.rawBody.toString('utf8') : ''),
+    user: null, // set by requireUser()
+    authClaims: r.authClaims || null, // verified access-token claims (set by app middleware) or null
+    authError: r.authError || null, // 401 to throw when a bearer token was sent but is invalid/expired
+    routeKey: null,
   };
-  handler.routes = Object.keys(routes);
-  return handler;
 }
 
-module.exports = { HttpError, err, json, ok, created, noContent, parseBody, rawBody, header, mapError, createRouter };
+function send(res, out) {
+  if (out && typeof out.statusCode === 'number') {
+    res.status(out.statusCode);
+    for (const [k, v] of Object.entries(out.headers || {})) res.setHeader(k, v);
+    return res.send(out.body == null ? '' : out.body);
+  }
+  return res.status(200).set(BASE_HEADERS).send(JSON.stringify(out === undefined ? { ok: true } : out));
+}
+
+// Mount a handler module's `routes` map on an Express app/router.
+function mountRoutes(app, routes) {
+  for (const [routeKey, fn] of Object.entries(routes || {})) {
+    const { method, expressPath } = compileRouteKey(routeKey);
+    const m = method.toLowerCase();
+    if (typeof app[m] !== 'function') throw new Error(`unsupported method in "${routeKey}"`);
+    app[m](expressPath, async (r, res) => {
+      if (config.maintenance.enabled && !MAINTENANCE_EXEMPT.test(r.path)) {
+        return send(res, json(503, { code: 'maintenance', message: config.maintenance.message }, { 'retry-after': '300' }));
+      }
+      const req = buildReq(r);
+      req.routeKey = routeKey;
+      try {
+        const out = await fn(req);
+        return send(res, out);
+      } catch (e) {
+        return send(res, mapError(e, { route: routeKey }));
+      }
+    });
+  }
+  return Object.keys(routes || {});
+}
+
+module.exports = { HttpError, err, json, ok, created, noContent, header, mapError, compileRouteKey, mountRoutes, buildReq, BASE_HEADERS };

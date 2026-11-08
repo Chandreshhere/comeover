@@ -1,7 +1,7 @@
 // Token storage (iOS Keychain / Android Keystore via react-native-keychain)
-// with single-flight refresh. Tokens never touch AsyncStorage.
+// with single-flight, rotating refresh. Tokens never touch AsyncStorage.
 import * as Keychain from 'react-native-keychain';
-import { decodeJwt, globalSignOut, refreshTokens } from './cognito';
+import { decodeJwt, logoutRemote, refreshTokens } from './auth';
 
 const SERVICE = 'app.projectirl.session';
 let tokens = null;
@@ -39,11 +39,11 @@ export async function clearSession({ remote = true } = {}) {
   } catch (e) {
     // ignore
   }
-  if (remote && t?.accessToken) await globalSignOut(t.accessToken);
+  if (remote && t?.refreshToken) await logoutRemote(t.refreshToken);
 }
 
 export const hasSession = () => !!tokens?.refreshToken;
-export const getUserSub = () => (tokens?.idToken ? decodeJwt(tokens.idToken)?.sub : null);
+export const getUserSub = () => (tokens?.accessToken ? decodeJwt(tokens.accessToken)?.sub : null);
 export const getRawAccessToken = () => tokens?.accessToken || null;
 
 export async function getAccessToken({ force = false } = {}) {
@@ -57,12 +57,13 @@ export async function getAccessToken({ force = false } = {}) {
         return t.accessToken;
       })
       .catch(async (e) => {
-        if (e.code === 'NotAuthorizedException') {
+        // Rotated/revoked/expired refresh token → sign out. Network errors keep the session.
+        if (e.code === 'session_expired' || e.status === 401) {
           await clearSession({ remote: false });
           listeners.forEach((fn) => fn('expired'));
           return null;
         }
-        throw e; // network etc. — keep the session, caller sees the error
+        throw e;
       })
       .finally(() => {
         refreshing = null;

@@ -120,7 +120,7 @@ export default function ReportFlowScreen() {
         <Card style={{ marginTop: space.xl }}>
           {[
             ['check-circle', 'Received', "Your report is logged. The other person isn't told who reported them."],
-            ['eye', 'Reviewed by a person', reason === 'underage' || reason === 'unsafe_behaviour' ? 'Prioritised — we aim to act within hours.' : 'Usually within 24–48 hours. We may limit the account while we look.'],
+            ['eye', 'Reviewed by a person', reason === 'underage' || reason === 'safety_threat' ? 'Prioritised — we aim to act within hours.' : 'Usually within 24–48 hours. We may limit the account while we look.'],
             ['bell', 'Outcome', 'You’ll get a notification and can see the status in Safety center.'],
           ].map(([icon, title, body], i) => (
             <View key={title} style={{ flexDirection: 'row', marginBottom: i === 2 ? 0 : space.md }}>

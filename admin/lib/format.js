@@ -48,14 +48,19 @@ export function initials(name = '') {
     .join('');
 }
 
+// Labels for the API's REASON_CODES (backend/src/services/safety.js).
 export const REASONS = {
   harassment: 'Harassment',
+  safety_threat: 'Safety threat / unsafe behaviour',
+  dating_or_solicitation: 'Dating, paid company or selling',
+  underage: 'Possibly under 18',
+  impersonation: 'Fake profile / impersonation',
   spam: 'Spam / undisclosed promotion',
-  no_show: 'Repeated no-show',
+  scam: 'Scam',
+  hate: 'Hate speech',
+  inappropriate_content: 'Inappropriate content',
+  no_show_abuse: 'Repeated no-shows',
   unsafe_venue: 'Unsafe / private venue',
-  fake_profile: 'Fake profile',
-  inappropriate_message: 'Inappropriate message',
-  payment_dispute: 'SplitMate dispute',
   other: 'Other',
 };
 

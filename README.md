@@ -5,16 +5,16 @@
 | Folder | What it is | Stack |
 |---|---|---|
 | [`mobile/`](mobile/README.md) | iOS and Android app (77 screens from the screen inventory) | React Native 0.76 CLI, JavaScript, React Navigation, Reanimated, zustand |
-| [`backend/`](backend/README.md) | API, auth, realtime and jobs | AWS SAM: API Gateway (HTTP + WebSocket), Lambda (Node.js), Cognito, RDS PostgreSQL/PostGIS, S3, SQS/EventBridge |
-| [`admin/`](admin/README.md) | Moderation and operations console | Next.js (App Router), Cognito Hosted UI |
+| [`backend/`](backend/README.md) | API, auth, realtime and jobs | Node.js + Express + MongoDB (Mongoose), WebSocket (`ws`), phone OTP via [Slide](https://slide.synquic.com), S3-compatible storage, Docker |
+| [`admin/`](admin/README.md) | Moderation and operations console | Next.js (App Router), phone OTP sign-in with server-assigned roles |
 
 The product spec lives in the root `0x_*.json`/`.sql`/`.csv` files, `11_Product_Research_and_Implementation_Blueprint.docx` and `prompt.md`.
 
 ## Getting started
 
-1. **Backend:** deploy the stack and run the migrations (`backend/README.md`).
-2. **Mobile:** `cd mobile && npm install && npm run configure -- --stack <stack> --region <region>`, then `npm run android` or `npm run ios`.
-3. **Admin:** copy `admin/.env.example` to `.env.local`, fill in the Cognito and API values, then `npm install && npm run dev`.
+1. **Backend:** `cd backend && cp .env.example .env` (MongoDB, Slide OTP widget and key, JWT secret…), then `docker compose up -d`, `npm run seed`, and `npm run grant-role -- <your phone> admin` (`backend/README.md`).
+2. **Mobile:** `cd mobile && npm install && npm run configure -- --api https://<api-host>/v1`, then `npm run android` or `npm run ios`.
+3. **Admin:** copy `admin/.env.example` to `.env.local`, set `NEXT_PUBLIC_API_URL`, then `npm install && npm run dev`.
 
 Every client talks only to real services. There are no mock or demo modes.
 

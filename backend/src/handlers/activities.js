@@ -1,7 +1,8 @@
 'use strict';
-// Plan lifecycle: create/edit, join requests (capacity enforced with row locks),
-// host approval, waitlist promotion, cancel, check-in, mutual completion + XP, feedback.
-const { createRouter, err, created } = require('../lib/http');
+// Plan lifecycle: create/edit, join requests (capacity enforced atomically on the
+// denormalised Activity.acceptedCount), host approval, waitlist promotion, cancel,
+// check-in, mutual completion + XP, private feedback.
+const { err, created } = require('../lib/http');
 const { check } = require('../lib/validate');
 const db = require('../lib/db');
 const { requireUser, assertAdult, assertCanAct, assertProfile } = require('../lib/auth');
@@ -10,123 +11,154 @@ const { enforce } = require('../lib/rateLimit');
 const { audit } = require('../lib/audit');
 const { notify } = require('../lib/notify');
 const realtime = require('../lib/realtime');
-const { enqueue } = require('../lib/queue');
+const jobs = require('../lib/jobs');
 const geo = require('../lib/geo');
 const { awardXp } = require('../lib/xp');
 const P = require('../lib/present');
 const A = require('../services/activities');
 
 const CHECKIN_RADIUS_M = 300;
-
-async function presentFresh(activityId, viewerId) {
-  const row = await A.getVisible(db, activityId, viewerId);
-  return row ? A.present(row, { viewerId }) : null;
-}
+const models = () => require('../models');
 
 function publishJoin(after, activityId, userId, state, extra = {}) {
   after(async () => {
     const data = { activityId, userId, state, ...extra };
-    await realtime.publish(`activity:${activityId}`, { type: 'join.updated', data });
-    await realtime.publish(`user:${userId}:notifications`, { type: 'join.updated', data });
+    await realtime.publish(`activity:${activityId}`, 'join.updated', data);
+    await realtime.publish(`user:${userId}:notifications`, 'join.updated', data);
   });
 }
 
 function publishActivity(after, activityId, data) {
-  after(() => realtime.publish(`activity:${activityId}`, { type: 'activity.updated', data: { activityId, ...data } }));
+  after(() => realtime.publish(`activity:${activityId}`, 'activity.updated', { activityId, ...data }));
 }
 
-async function blockedBetween(q, a, b) {
-  const { rowCount } = await q.query(
-    'SELECT 1 FROM user_blocks WHERE (blocker_user_id = $1 AND blocked_user_id = $2) OR (blocker_user_id = $2 AND blocked_user_id = $1)',
-    [a, b]
-  );
-  return rowCount > 0;
+function publishMessage(after, msg) {
+  if (msg) after(() => realtime.publish(`conversation:${msg.conversationId}`, 'message.created', msg));
+}
+
+async function loadActivity(id, session) {
+  const { Activity } = models();
+  const a = await Activity.findById(String(id)).session(session).lean();
+  if (!a) throw err.notFound('activity_not_found');
+  return a;
+}
+
+async function displayName(userId, session) {
+  const { User } = models();
+  const u = await User.findById(userId).select('profile.displayName').session(session || null).lean();
+  return (u && u.profile && u.profile.displayName) || 'A member';
+}
+
+// Atomically take one seat. Returns the updated activity, or null when full / not joinable.
+async function takeSeat(activityId, session, statuses = ['open', 'full', 'in_progress']) {
+  const { Activity } = models();
+  const a = await Activity.findOneAndUpdate(
+    { _id: activityId, status: { $in: statuses }, $expr: { $lt: ['$acceptedCount', '$capacity'] } },
+    { $inc: { acceptedCount: 1 } },
+    { new: true, session }
+  ).lean();
+  if (a && a.acceptedCount >= a.capacity && a.status === 'open') {
+    await Activity.updateOne({ _id: activityId }, { $set: { status: 'full' } }, { session });
+    a.status = 'full';
+  }
+  return a;
+}
+
+// Give a seat back (cancel, removal, no-show) and reopen a full plan.
+async function releaseSeat(activityId, session) {
+  const { Activity } = models();
+  const a = await Activity.findOneAndUpdate({ _id: activityId, acceptedCount: { $gt: 1 } }, { $inc: { acceptedCount: -1 } }, { new: true, session }).lean();
+  if (a && a.status === 'full' && a.acceptedCount < a.capacity) await Activity.updateOne({ _id: activityId }, { $set: { status: 'open' } }, { session });
+  return a;
 }
 
 // Promote the first waitlisted person when a spot frees up.
-async function promoteWaitlist(client, after, activity) {
-  const n = await A.countInGroup(client, activity.id);
-  if (n >= activity.capacity) return null;
-  const { rows } = await client.query(
-    "SELECT id, user_id FROM activity_participants WHERE activity_id = $1 AND state = 'waitlisted' ORDER BY waitlist_position NULLS LAST, requested_at LIMIT 1 FOR UPDATE",
-    [activity.id]
-  );
-  const w = rows[0];
+async function promoteWaitlist(session, after, activityId) {
+  const { Activity, Participant } = models();
+  const activity = await Activity.findById(activityId).session(session).lean();
+  if (!activity || activity.acceptedCount >= activity.capacity) return null;
+  const w = await Participant.findOne({ activityId, state: 'waitlisted' }).sort({ waitlistPosition: 1, requestedAt: 1 }).session(session).lean();
   if (!w) {
-    if (activity.status === 'full') await client.query("UPDATE activities SET status = 'open' WHERE id = $1", [activity.id]);
+    if (activity.status === 'full') await Activity.updateOne({ _id: activityId }, { $set: { status: 'open' } }, { session });
     return null;
   }
-  const next = activity.join_rule === 'instant' ? 'accepted' : 'requested';
-  await client.query('UPDATE activity_participants SET state = $2, waitlist_position = NULL, decided_at = CASE WHEN $2 = \'accepted\' THEN now() ELSE decided_at END WHERE id = $1', [w.id, next]);
+  let next = activity.joinRule === 'instant' ? 'accepted' : 'requested';
+  if (next === 'accepted' && !(await takeSeat(activityId, session))) next = 'requested';
+  await Activity.updateOne({ _id: activityId, waitlistCount: { $gt: 0 } }, { $inc: { waitlistCount: -1 } }, { session });
+  await Participant.updateOne({ _id: w._id }, { $set: { state: next, waitlistPosition: null, ...(next === 'accepted' ? { decidedAt: new Date() } : {}) } }, { session });
   if (next === 'accepted') {
-    const convId = await A.addToActivityConversation(client, activity.id, w.user_id);
-    await notify(client, after, w.user_id, { type: 'join', title: "A spot opened — you're in", body: activity.title, data: { activityId: activity.id, target: { screen: 'group_chat', params: { conversationId: convId } } } });
+    const convId = await A.addToActivityConversation(activityId, w.userId, { session });
+    await notify(session, after, w.userId, { type: 'join', title: "A spot opened — you're in", body: activity.title, data: { activityId, target: { screen: 'group_chat', params: { conversationId: convId } } } });
   } else {
-    await notify(client, after, w.user_id, { type: 'join', title: 'A spot opened up', body: `Your request for "${activity.title}" is now with the host.`, data: { activityId: activity.id, target: { screen: 'activity_detail', params: { id: activity.id } } } });
-    await notify(client, after, activity.host_user_id, { type: 'join', title: 'New join request', body: activity.title, data: { activityId: activity.id, target: { screen: 'activity_detail', params: { id: activity.id, tab: 'requests' } } } });
+    await notify(session, after, w.userId, { type: 'join', title: 'A spot opened up', body: `Your request for "${activity.title}" is now with the host.`, data: { activityId, target: { screen: 'activity_detail', params: { id: activityId } } } });
+    await notify(session, after, activity.hostUserId, { type: 'join', title: 'New join request', body: activity.title, data: { activityId, target: { screen: 'activity_detail', params: { id: activityId, tab: 'requests' } } } });
   }
-  publishJoin(after, activity.id, w.user_id, next);
-  const after2 = await A.countInGroup(client, activity.id);
-  await client.query('UPDATE activities SET status = $2 WHERE id = $1', [activity.id, after2 >= activity.capacity ? 'full' : 'open']);
-  return w.user_id;
+  publishJoin(after, activityId, w.userId, next);
+  return w.userId;
 }
 
 // Mutual completion rule: host + ≥1 attendee confirmed, or ≥2 verified (proximity/host) check-ins.
-async function maybeComplete(client, after, activity) {
-  const { rows } = await client.query(
-    `SELECT user_id, state, completion_confirmed_at, check_in_method FROM activity_participants
-      WHERE activity_id = $1 AND state IN ('accepted','checked_in','completed')`,
-    [activity.id]
-  );
-  const hostConfirmed = rows.some((r) => r.user_id === activity.host_user_id && r.completion_confirmed_at);
-  const guestConfirmed = rows.some((r) => r.user_id !== activity.host_user_id && r.completion_confirmed_at);
-  const verifiedCheckins = rows.filter((r) => ['proximity', 'host'].includes(r.check_in_method)).length;
+async function maybeComplete(session, after, activity) {
+  const { Activity, Participant, ReliabilityEvent } = models();
+  const rows = await Participant.find({ activityId: activity._id, state: { $in: A.IN_GROUP_STATES } }).session(session).lean();
+  const hostConfirmed = rows.some((r) => r.userId === activity.hostUserId && r.completionConfirmedAt);
+  const guestConfirmed = rows.some((r) => r.userId !== activity.hostUserId && r.completionConfirmedAt);
+  const verifiedCheckins = rows.filter((r) => ['proximity', 'host'].includes(r.checkInMethod)).length;
   const mutual = activity.status === 'completed' || (hostConfirmed && guestConfirmed) || verifiedCheckins >= 2;
   if (!mutual) return { mutual: false, awards: {} };
 
-  const { rows: catRow } = await client.query('SELECT slug FROM activity_categories WHERE id = $1', [activity.category_id]);
-  const category = catRow[0] && catRow[0].slug;
   const awards = {};
-  const eligible = rows.filter((r) => r.completion_confirmed_at || ['proximity', 'host'].includes(r.check_in_method));
+  const eligible = rows.filter((r) => r.completionConfirmedAt || ['proximity', 'host'].includes(r.checkInMethod));
   for (const r of eligible) {
     const total = { xp: 0 };
-    const base = await awardXp(client, { userId: r.user_id, eventType: 'activity_completed', refId: activity.id, activityId: activity.id });
+    const base = await awardXp(session, { userId: r.userId, eventType: 'activity_completed', refId: activity._id, activityId: activity._id });
     total.xp += base.xp;
     if (base.leveledUp) total.level = base.level;
-    if (category && r.state !== 'completed') {
-      const { rowCount: before } = await client.query(
-        "SELECT 1 FROM activity_participants p JOIN activities x ON x.id = p.activity_id WHERE p.user_id = $1 AND p.state = 'completed' AND x.category_id = $2 AND x.id <> $3 LIMIT 1",
-        [r.user_id, activity.category_id, activity.id]
-      );
+    if (activity.category && r.state !== 'completed') {
+      const doneIds = await Participant.distinct('activityId', { userId: r.userId, state: 'completed', activityId: { $ne: activity._id } }).session(session);
+      const before = doneIds.length ? await Activity.exists({ _id: { $in: doneIds }, category: activity.category }).session(session) : null;
       if (!before) {
-        const nc = await awardXp(client, { userId: r.user_id, eventType: 'new_category_explored', refId: category, activityId: activity.id });
+        const nc = await awardXp(session, { userId: r.userId, eventType: 'new_category_explored', refId: activity.category, activityId: activity._id });
         total.xp += nc.xp;
         if (nc.leveledUp) total.level = nc.level;
       }
     }
-    if (r.user_id === activity.host_user_id && !activity.cancelled_at) {
-      const h = await awardXp(client, { userId: r.user_id, eventType: 'hosted_completed', refId: activity.id, activityId: activity.id });
+    if (r.userId === activity.hostUserId && !activity.cancelledAt) {
+      const h = await awardXp(session, { userId: r.userId, eventType: 'hosted_completed', refId: activity._id, activityId: activity._id });
       total.xp += h.xp;
       if (h.leveledUp) total.level = h.level;
     }
-    await client.query(
-      "UPDATE activity_participants SET state = 'completed', completion_confirmed_at = COALESCE(completion_confirmed_at, now()) WHERE activity_id = $1 AND user_id = $2",
-      [activity.id, r.user_id]
-    );
-    await client.query("INSERT INTO reliability_events (user_id, activity_id, kind) VALUES ($1, $2, 'attended') ON CONFLICT DO NOTHING", [r.user_id, activity.id]);
-    awards[r.user_id] = total;
+    await Participant.updateOne({ _id: r._id }, { $set: { state: 'completed', completionConfirmedAt: r.completionConfirmedAt || new Date() } }, { session });
+    await ReliabilityEvent.updateOne({ userId: r.userId, activityId: activity._id, kind: 'attended' }, { $setOnInsert: { userId: r.userId, activityId: activity._id, kind: 'attended' } }, { upsert: true, session });
+    awards[r.userId] = total;
   }
   if (activity.status !== 'completed') {
-    await client.query("UPDATE activities SET status = 'completed', completed_at = now() WHERE id = $1", [activity.id]);
-    publishActivity(after, activity.id, { status: 'completed' });
+    await Activity.updateOne({ _id: activity._id }, { $set: { status: 'completed', completedAt: new Date() } }, { session });
+    publishActivity(after, activity._id, { status: 'completed' });
   }
   after(async () => {
     for (const userId of Object.keys(awards)) {
-      await enqueue({ type: 'quest_evaluate', userId });
-      await enqueue({ type: 'reliability_recalc', userId });
+      await jobs.enqueue('quest_evaluate', { userId }, { dedupeKey: `qe:${userId}:${activity._id}` });
+      await jobs.enqueue('reliability_recalc', { userId }, { dedupeKey: `rr:${userId}:${activity._id}` });
     }
   });
   return { mutual: true, awards };
+}
+
+// Progress for the completion response (services/progress is ported by the "me & progress" group).
+async function progressFor(userId) {
+  try {
+    const S = require('../services/progress');
+    const fn = S.progressFor;
+    const out = fn.length >= 2 ? await fn(null, userId) : await fn(userId);
+    const { _stats, ...progress } = out || {};
+    return progress;
+  } catch (e) {
+    const { User } = models();
+    const u = await User.findById(userId).select('progress').lean();
+    const p = (u && u.progress) || {};
+    return { xp: p.xpTotal || 0, level: { level: p.level || 1 } };
+  }
 }
 
 const routes = {
@@ -135,10 +167,10 @@ const routes = {
     assertProfile(user);
     assertAdult(user);
     assertCanAct(user, 'create');
-    return withIdempotency(db, req, user.id, async () => {
-      await enforce(db, 'create_plan', user.id);
-      const { id } = await db.withTransaction((client) => A.createActivity(client, user, req.body, { ip: req.ip }));
-      return created(await presentFresh(id, user.id));
+    return withIdempotency(req, user.id, async () => {
+      await enforce('create_plan', user.id);
+      const { id } = await db.withTransaction((session) => A.createActivity(session, user, req.body, { ip: req.ip }));
+      return created(await A.presentFresh(id, user.id));
     });
   },
 
@@ -148,7 +180,6 @@ const routes = {
       {
         title: { type: 'string', min: 3, max: 80 },
         description: { type: 'string', max: 1000 },
-        capacity: { type: 'integer', min: 2, max: 30 },
         joinRule: { type: 'string', enum: ['approval', 'instant'] },
         venueName: { type: 'string', max: 120 },
         costNote: { type: 'string', max: 120 },
@@ -156,38 +187,41 @@ const routes = {
         tags: { type: 'array', max: 8, items: { type: 'string', max: 24 } },
         accessibility: { type: 'string', max: 300 },
       },
-      { ...req.body, capacity: undefined }
+      req.body
     );
     if (req.body.capacity != null) {
       const cap = Number(req.body.capacity);
       if (!Number.isInteger(cap) || cap < 2 || cap > 30) throw err.badRequest('capacity_out_of_range', 'Groups can be 2–30 people');
       v.capacity = cap;
     }
-    await db.withTransaction(async (client, after) => {
-      const a = await A.lockActivity(client, req.params.activityId);
-      if (a.host_user_id !== user.id) throw err.forbidden('host_only');
+    const { Activity } = models();
+    await db.withTransaction(async (session, after) => {
+      const a = await loadActivity(req.params.activityId, session);
+      if (a.hostUserId !== user.id) throw err.forbidden('host_only');
       if (!['open', 'full', 'draft'].includes(a.status)) throw err.conflict('not_editable', 'This plan can no longer be edited');
-      if (v.capacity != null) {
-        const n = await A.countInGroup(client, a.id);
-        if (v.capacity < n) throw err.conflict('capacity_below_joined', `${n} people have already joined`);
+      if (v.capacity != null && v.capacity < a.acceptedCount) throw err.conflict('capacity_below_joined', `${a.acceptedCount} people have already joined`);
+      if (v.venueName && A.PRIVATE_VENUE_RE.test(v.venueName)) throw err.badRequest('private_venue_not_allowed', 'Plans must meet at a public venue or public area');
+      const set = {};
+      if (v.title != null) set.title = v.title;
+      if (v.description != null) set.description = v.description;
+      if (v.capacity != null) set.capacity = v.capacity;
+      if (v.joinRule != null) set.joinRule = v.joinRule;
+      if (v.venueName != null) set.venueName = v.venueName;
+      if ((v.cost ?? v.costNote) != null) set.costNote = v.cost ?? v.costNote;
+      if (v.tags != null) set.tags = v.tags;
+      if (v.accessibility != null) set.accessibilityNotes = v.accessibility;
+      if (v.capacity != null && ['open', 'full'].includes(a.status)) set.status = a.acceptedCount >= v.capacity ? 'full' : 'open';
+      if (Object.keys(set).length) await Activity.updateOne({ _id: a._id }, { $set: set }, { session });
+      if (v.capacity != null && a.acceptedCount < v.capacity) {
+        // Fill newly opened seats from the waitlist.
+        for (let i = 0; i < v.capacity - a.acceptedCount; i++) {
+          if (!(await promoteWaitlist(session, after, a._id))) break;
+        }
       }
-      if (v.venueName && /\b(home|residence|house|flat|apartment|hotel room|my place)\b/i.test(v.venueName)) throw err.badRequest('private_venue_not_allowed', 'Plans must meet at a public venue or public area');
-      await client.query(
-        `UPDATE activities SET title = COALESCE($2, title), description = COALESCE($3, description), capacity = COALESCE($4, capacity),
-           join_rule = COALESCE($5, join_rule), venue_name = COALESCE($6, venue_name), cost_note = COALESCE($7, cost_note),
-           tags = COALESCE($8, tags), accessibility_notes = COALESCE($9, accessibility_notes), updated_at = now()
-         WHERE id = $1`,
-        [a.id, v.title ?? null, v.description ?? null, v.capacity ?? null, v.joinRule ?? null, v.venueName ?? null, v.cost ?? v.costNote ?? null, v.tags ?? null, v.accessibility ?? null]
-      );
-      if (v.capacity != null) {
-        const n = await A.countInGroup(client, a.id);
-        await client.query('UPDATE activities SET status = $2 WHERE id = $1', [a.id, n >= v.capacity ? 'full' : 'open']);
-        if (n < v.capacity) await promoteWaitlist(client, after, { ...a, capacity: v.capacity, status: 'open' });
-      }
-      await audit(client, { actorUserId: user.id, action: 'activity.update', targetType: 'activity', targetId: a.id, metadata: Object.keys(v), ip: req.ip });
-      publishActivity(after, a.id, { fields: Object.keys(v) });
+      await audit({ actorUserId: user.id, action: 'activity.update', targetType: 'activity', targetId: a._id, metadata: Object.keys(v), ip: req.ip }, { session });
+      publishActivity(after, a._id, { fields: Object.keys(v) });
     });
-    return presentFresh(req.params.activityId, user.id);
+    return A.presentFresh(req.params.activityId, user.id);
   },
 
   'POST /v1/activities/{activityId}/join-requests': async (req) => {
@@ -196,182 +230,196 @@ const routes = {
     assertAdult(user);
     assertCanAct(user, 'join');
     const { intro } = check({ intro: { type: 'string', max: 280 } }, req.body);
-    return withIdempotency(db, req, user.id, async () => {
-      await enforce(db, 'join_request', user.id);
-      const result = await db.withTransaction(async (client, after) => {
-        const a = await A.lockActivity(client, req.params.activityId);
-        const visible = await A.getVisible(client, a.id, user.id);
-        if (!visible) throw err.notFound('activity_not_found');
-        if (a.host_user_id === user.id) throw err.conflict('own_plan', "You're hosting this plan");
-        if (await blockedBetween(client, user.id, a.host_user_id)) throw err.notFound('activity_not_found');
+    return withIdempotency(req, user.id, async () => {
+      await enforce('join_request', user.id);
+      const result = await db.withTransaction(async (session, after) => {
+        const { Activity, Participant } = models();
+        const a = await A.getVisible(req.params.activityId, user.id, { session });
+        if (!a) throw err.notFound('activity_not_found');
+        if (a.hostUserId === user.id) throw err.conflict('own_plan', "You're hosting this plan");
+        if (await A.blockedBetween(user.id, a.hostUserId, { session })) throw err.notFound('activity_not_found');
         if (!['open', 'full'].includes(a.status)) throw err.conflict('not_joinable', 'This plan is not taking requests');
-        if (new Date(a.starts_at).getTime() < Date.now() - 15 * 60000) throw err.conflict('already_started', 'This plan has already started');
+        if (new Date(a.startsAt).getTime() < Date.now() - 15 * 60000) throw err.conflict('already_started', 'This plan has already started');
 
-        const { rows: ex } = await client.query('SELECT id, state, waitlist_position FROM activity_participants WHERE activity_id = $1 AND user_id = $2 FOR UPDATE', [a.id, user.id]);
-        const existing = ex[0];
+        const existing = await Participant.findOne({ activityId: a._id, userId: user.id }).session(session).lean();
         if (existing && ['requested', 'accepted', 'waitlisted', 'checked_in', 'completed'].includes(existing.state)) {
-          return { requestId: existing.id, state: existing.state, waitlistPosition: existing.waitlist_position };
+          return { requestId: existing._id, state: existing.state, waitlistPosition: existing.waitlistPosition ?? null, conversationId: null };
         }
         if (existing && existing.state === 'declined') throw err.conflict('declined', 'The host declined this request');
         if (existing && existing.state === 'no_show') throw err.conflict('not_joinable');
 
-        const inGroup = await A.countInGroup(client, a.id);
         let state;
         let waitlistPosition = null;
-        if (inGroup >= a.capacity) {
-          state = 'waitlisted';
-          const { rows: wp } = await client.query(
-            "SELECT COALESCE(max(waitlist_position), 0) + 1 AS n, count(*)::int AS waiting FROM activity_participants WHERE activity_id = $1 AND state = 'waitlisted'",
-            [a.id]
-          );
-          // Waitlist holds at most max(5, capacity) people; beyond that the plan is simply full.
-          if (wp[0].waiting >= Math.max(5, a.capacity)) throw err.conflict('capacity_full', 'This plan and its waitlist are full');
-          waitlistPosition = wp[0].n;
-        } else {
-          state = a.join_rule === 'instant' ? 'accepted' : 'requested';
+        let seat = null;
+        if (a.joinRule === 'instant') {
+          seat = await takeSeat(a._id, session, ['open', 'full']);
+          if (seat) state = 'accepted';
+        } else if (a.acceptedCount < a.capacity) {
+          state = 'requested';
         }
+        if (!state) {
+          // Waitlist holds at most max(5, capacity) people; beyond that the plan is simply full.
+          const w = await Activity.findOneAndUpdate(
+            { _id: a._id, $expr: { $lt: ['$waitlistCount', { $max: [5, '$capacity'] }] } },
+            { $inc: { waitlistCount: 1, nextWaitlistPosition: 1 } },
+            { new: false, session }
+          ).lean();
+          if (!w) throw err.conflict('capacity_full', 'This plan and its waitlist are full');
+          state = 'waitlisted';
+          waitlistPosition = w.nextWaitlistPosition || 1;
+        }
+        const now = new Date();
+        const fields = { state, intro: intro || null, waitlistPosition, requestedAt: now, decidedAt: state === 'accepted' ? now : null };
         let requestId;
         if (existing) {
-          await client.query(
-            'UPDATE activity_participants SET state = $2, intro = $3, waitlist_position = $4, requested_at = now(), decided_at = CASE WHEN $2 = \'accepted\' THEN now() END WHERE id = $1',
-            [existing.id, state, intro || null, waitlistPosition]
-          );
-          requestId = existing.id;
+          await Participant.updateOne({ _id: existing._id }, { $set: fields }, { session });
+          requestId = existing._id;
         } else {
-          const { rows } = await client.query(
-            "INSERT INTO activity_participants (activity_id, user_id, state, intro, waitlist_position, decided_at) VALUES ($1, $2, $3, $4, $5, CASE WHEN $3 = 'accepted' THEN now() END) RETURNING id",
-            [a.id, user.id, state, intro || null, waitlistPosition]
-          );
-          requestId = rows[0].id;
+          const [p] = await Participant.create([{ activityId: a._id, userId: user.id, ...fields }], { session });
+          requestId = p._id;
         }
         let conversationId = null;
         if (state === 'accepted') {
-          conversationId = await A.addToActivityConversation(client, a.id, user.id);
-          await A.systemMessage(client, conversationId, `${user.displayName} joined the plan.`);
-          if (inGroup + 1 >= a.capacity) await client.query("UPDATE activities SET status = 'full' WHERE id = $1", [a.id]);
-          await notify(client, after, a.host_user_id, { type: 'join', title: `${user.displayName} joined your plan`, body: a.title, data: { activityId: a.id, target: { screen: 'activity_detail', params: { id: a.id } } } });
+          conversationId = await A.addToActivityConversation(a._id, user.id, { session });
+          publishMessage(after, await A.systemMessage(conversationId, `${user.displayName} joined the plan.`, { session }));
+          await notify(session, after, a.hostUserId, { type: 'join', title: `${user.displayName} joined your plan`, body: a.title, data: { activityId: a._id, target: { screen: 'activity_detail', params: { id: a._id } } } });
         } else if (state === 'requested') {
-          await notify(client, after, a.host_user_id, { type: 'join', title: `${user.displayName} wants to join`, body: a.title, data: { activityId: a.id, requestId, target: { screen: 'activity_detail', params: { id: a.id, tab: 'requests' } } } });
+          await notify(session, after, a.hostUserId, { type: 'join', title: `${user.displayName} wants to join`, body: a.title, data: { activityId: a._id, requestId, target: { screen: 'activity_detail', params: { id: a._id, tab: 'requests' } } } });
         }
-        publishJoin(after, a.id, user.id, state, { requestId });
+        publishJoin(after, a._id, user.id, state, { requestId });
         return { requestId, state, waitlistPosition, conversationId };
       });
-      return { ...result, activity: await presentFresh(req.params.activityId, user.id) };
+      return { ...result, activity: await A.presentFresh(req.params.activityId, user.id) };
     });
   },
 
   'GET /v1/activities/{activityId}/join-requests': async (req) => {
     const user = await requireUser(req);
-    const a = await db.one('SELECT host_user_id FROM activities WHERE id = $1', [req.params.activityId]);
+    const { Activity, Participant, User } = models();
+    const a = await Activity.findById(String(req.params.activityId)).select('hostUserId').lean();
     if (!a) throw err.notFound('activity_not_found');
-    if (a.host_user_id !== user.id) throw err.forbidden('host_only');
-    const rows = await db.many(
-      `SELECT ap.id AS request_id, ap.state, ap.intro, ap.requested_at, ap.waitlist_position,
-              u.id, p.display_name, p.avatar_key, p.reliability_score, p.interests, p.home_area AS area, COALESCE(up.level, 1) AS level,
-              (SELECT count(*)::int FROM activity_participants x WHERE x.user_id = u.id AND x.state = 'completed') AS completed
-         FROM activity_participants ap JOIN app_users u ON u.id = ap.user_id JOIN profiles p ON p.user_id = u.id
-         LEFT JOIN user_progress up ON up.user_id = u.id
-        WHERE ap.activity_id = $1 AND ap.user_id <> $2 AND ap.state IN ('requested','waitlisted','accepted','checked_in')
-        ORDER BY (ap.state = 'requested') DESC, ap.requested_at`,
-      [req.params.activityId, user.id]
-    );
+    if (a.hostUserId !== user.id) throw err.forbidden('host_only');
+    const rows = await Participant.find({ activityId: a._id, userId: { $ne: user.id }, state: { $in: ['requested', 'waitlisted', 'accepted', 'checked_in'] } }).lean();
+    rows.sort((x, y) => (y.state === 'requested') - (x.state === 'requested') || new Date(x.requestedAt) - new Date(y.requestedAt));
+    const users = await User.find({ _id: { $in: rows.map((r) => r.userId) } })
+      .select('profile progress availability')
+      .lean();
+    const byId = new Map(users.map((u) => [u._id, u]));
+    const counts = await Participant.aggregate([{ $match: { userId: { $in: rows.map((r) => r.userId) }, state: 'completed' } }, { $group: { _id: '$userId', n: { $sum: 1 } } }]);
+    const done = new Map(counts.map((c) => [c._id, c.n]));
     const items = await Promise.all(
-      rows.map(async (r) => ({ id: r.request_id, userId: r.id, user: await P.publicUser(r), intro: r.intro, state: r.state, requestedAt: r.requested_at, waitlistPosition: r.waitlist_position }))
+      rows
+        .filter((r) => byId.has(r.userId))
+        .map(async (r) => {
+          const u = byId.get(r.userId);
+          return {
+            id: r._id,
+            userId: r.userId,
+            user: await P.publicUser(u, { completed: done.get(r.userId) || 0, area: (u.profile && u.profile.homeArea) || undefined }),
+            intro: r.intro,
+            state: r.state,
+            requestedAt: r.requestedAt,
+            waitlistPosition: r.waitlistPosition ?? null,
+          };
+        })
     );
     return { items, nextCursor: null };
   },
 
   'DELETE /v1/activities/{activityId}/join-requests/me': async (req) => {
     const user = await requireUser(req);
-    await db.withTransaction(async (client, after) => {
-      const a = await A.lockActivity(client, req.params.activityId);
-      if (a.host_user_id === user.id) throw err.conflict('host_cannot_leave', 'Cancel the plan instead');
-      const { rows } = await client.query('SELECT id, state FROM activity_participants WHERE activity_id = $1 AND user_id = $2 FOR UPDATE', [a.id, user.id]);
-      const p = rows[0];
-      if (!p || !['requested', 'accepted', 'waitlisted', 'checked_in'].includes(p.state)) throw err.notFound('no_active_request');
-      await client.query("UPDATE activity_participants SET state = 'cancelled', waitlist_position = NULL WHERE id = $1", [p.id]);
+    await db.withTransaction(async (session, after) => {
+      const { Activity, Participant, ReliabilityEvent } = models();
+      const a = await loadActivity(req.params.activityId, session);
+      if (a.hostUserId === user.id) throw err.conflict('host_cannot_leave', 'Cancel the plan instead');
+      const p = await Participant.findOne({ activityId: a._id, userId: user.id }).session(session).lean();
+      if (!p || !A.ACTIVE_STATES.includes(p.state)) throw err.notFound('no_active_request');
+      await Participant.updateOne({ _id: p._id }, { $set: { state: 'cancelled', waitlistPosition: null } }, { session });
+      if (p.state === 'waitlisted') await Activity.updateOne({ _id: a._id, waitlistCount: { $gt: 0 } }, { $inc: { waitlistCount: -1 } }, { session });
       if (['accepted', 'checked_in'].includes(p.state)) {
-        await A.removeFromActivityConversation(client, a.id, user.id);
-        const convId = await A.groupConversationId(client, a.id);
-        await A.systemMessage(client, convId, `${user.displayName} can't make it anymore.`);
-        if (new Date(a.starts_at).getTime() - Date.now() < 2 * 3600000) {
-          await client.query("INSERT INTO reliability_events (user_id, activity_id, kind) VALUES ($1, $2, 'late_cancel') ON CONFLICT DO NOTHING", [user.id, a.id]);
+        await releaseSeat(a._id, session);
+        await A.removeFromActivityConversation(a._id, user.id, { session });
+        const convId = await A.groupConversationId(a._id, { session });
+        publishMessage(after, await A.systemMessage(convId, `${user.displayName} can't make it anymore.`, { session }));
+        if (new Date(a.startsAt).getTime() - Date.now() < 2 * 3600000) {
+          await ReliabilityEvent.updateOne({ userId: user.id, activityId: a._id, kind: 'late_cancel' }, { $setOnInsert: { userId: user.id, activityId: a._id, kind: 'late_cancel' } }, { upsert: true, session });
         }
-        await notify(client, after, a.host_user_id, { type: 'join', title: `${user.displayName} dropped out`, body: a.title, data: { activityId: a.id, target: { screen: 'activity_detail', params: { id: a.id } } } });
-        await promoteWaitlist(client, after, a);
+        await notify(session, after, a.hostUserId, { type: 'join', title: `${user.displayName} dropped out`, body: a.title, data: { activityId: a._id, target: { screen: 'activity_detail', params: { id: a._id } } } });
+        await promoteWaitlist(session, after, a._id);
       }
-      publishJoin(after, a.id, user.id, 'cancelled');
+      publishJoin(after, a._id, user.id, 'cancelled');
     });
-    return { state: 'cancelled', activity: await presentFresh(req.params.activityId, user.id) };
+    return { state: 'cancelled', activity: await A.presentFresh(req.params.activityId, user.id) };
   },
 
   'POST /v1/activities/{activityId}/join-requests/{requestId}/accept': async (req) => {
     const user = await requireUser(req);
     assertCanAct(user, 'host');
-    return withIdempotency(db, req, user.id, async () => {
-      const out = await db.withTransaction(async (client, after) => {
-        const a = await A.lockActivity(client, req.params.activityId);
-        if (a.host_user_id !== user.id) throw err.forbidden('host_only');
-        const { rows } = await client.query('SELECT id, user_id, state FROM activity_participants WHERE id = $1 AND activity_id = $2 FOR UPDATE', [req.params.requestId, a.id]);
-        const p = rows[0];
+    return withIdempotency(req, user.id, async () =>
+      db.withTransaction(async (session, after) => {
+        const { Activity, Participant } = models();
+        const a = await loadActivity(req.params.activityId, session);
+        if (a.hostUserId !== user.id) throw err.forbidden('host_only');
+        const p = await Participant.findOne({ _id: String(req.params.requestId), activityId: a._id }).session(session).lean();
         if (!p) throw err.notFound('request_not_found');
-        if (p.state === 'accepted') return { requestId: p.id, state: 'accepted' };
+        if (p.state === 'accepted') return { requestId: p._id, state: 'accepted' };
         if (!['requested', 'waitlisted'].includes(p.state)) throw err.conflict('not_pending');
-        if (await blockedBetween(client, user.id, p.user_id)) throw err.conflict('blocked');
-        const n = await A.countInGroup(client, a.id);
-        if (n >= a.capacity) throw err.conflict('capacity_full', 'The plan is full — raise capacity or wait for a spot');
-        await client.query("UPDATE activity_participants SET state = 'accepted', decided_at = now(), decided_by = $2, waitlist_position = NULL WHERE id = $1", [p.id, user.id]);
-        const convId = await A.addToActivityConversation(client, a.id, p.user_id);
-        const { rows: who } = await client.query('SELECT display_name FROM profiles WHERE user_id = $1', [p.user_id]);
-        await A.systemMessage(client, convId, `${user.displayName} accepted ${who[0] ? who[0].display_name : 'a new member'}. The exact meeting spot is shared in this chat only.`);
-        if (n + 1 >= a.capacity) await client.query("UPDATE activities SET status = 'full' WHERE id = $1", [a.id]);
-        await notify(client, after, p.user_id, { type: 'join', title: `${user.displayName} accepted your request`, body: `${a.title} — group chat is open.`, data: { activityId: a.id, target: { screen: 'group_chat', params: { conversationId: convId } } } });
-        await audit(client, { actorUserId: user.id, action: 'join.accept', targetType: 'activity_participant', targetId: p.id, ip: req.ip });
-        publishJoin(after, a.id, p.user_id, 'accepted', { requestId: p.id, conversationId: convId });
-        return { requestId: p.id, state: 'accepted', conversationId: convId };
-      });
-      return out;
-    });
+        if (await A.blockedBetween(user.id, p.userId, { session })) throw err.conflict('blocked');
+        if (!(await takeSeat(a._id, session))) throw err.conflict('capacity_full', 'The plan is full — raise capacity or wait for a spot');
+        if (p.state === 'waitlisted') await Activity.updateOne({ _id: a._id, waitlistCount: { $gt: 0 } }, { $inc: { waitlistCount: -1 } }, { session });
+        await Participant.updateOne({ _id: p._id }, { $set: { state: 'accepted', decidedAt: new Date(), decidedBy: user.id, waitlistPosition: null } }, { session });
+        const convId = await A.addToActivityConversation(a._id, p.userId, { session });
+        const who = await displayName(p.userId, session);
+        publishMessage(after, await A.systemMessage(convId, `${user.displayName} accepted ${who}. The exact meeting spot is shared in this chat only.`, { session }));
+        await notify(session, after, p.userId, { type: 'join', title: `${user.displayName} accepted your request`, body: `${a.title} — group chat is open.`, data: { activityId: a._id, target: { screen: 'group_chat', params: { conversationId: convId } } } });
+        await audit({ actorUserId: user.id, action: 'join.accept', targetType: 'activity_participant', targetId: p._id, ip: req.ip }, { session });
+        publishJoin(after, a._id, p.userId, 'accepted', { requestId: p._id, conversationId: convId });
+        return { requestId: p._id, state: 'accepted', conversationId: convId };
+      })
+    );
   },
 
   'POST /v1/activities/{activityId}/join-requests/{requestId}/decline': async (req) => {
     const user = await requireUser(req);
-    return db.withTransaction(async (client, after) => {
-      const a = await A.lockActivity(client, req.params.activityId);
-      if (a.host_user_id !== user.id) throw err.forbidden('host_only');
-      const { rows } = await client.query('SELECT id, user_id, state FROM activity_participants WHERE id = $1 AND activity_id = $2 FOR UPDATE', [req.params.requestId, a.id]);
-      const p = rows[0];
+    return db.withTransaction(async (session, after) => {
+      const { Activity, Participant } = models();
+      const a = await loadActivity(req.params.activityId, session);
+      if (a.hostUserId !== user.id) throw err.forbidden('host_only');
+      const p = await Participant.findOne({ _id: String(req.params.requestId), activityId: a._id }).session(session).lean();
       if (!p) throw err.notFound('request_not_found');
       if (!['requested', 'waitlisted'].includes(p.state)) throw err.conflict('not_pending');
-      await client.query("UPDATE activity_participants SET state = 'declined', decided_at = now(), decided_by = $2, waitlist_position = NULL WHERE id = $1", [p.id, user.id]);
+      await Participant.updateOne({ _id: p._id }, { $set: { state: 'declined', decidedAt: new Date(), decidedBy: user.id, waitlistPosition: null } }, { session });
+      if (p.state === 'waitlisted') await Activity.updateOne({ _id: a._id, waitlistCount: { $gt: 0 } }, { $inc: { waitlistCount: -1 } }, { session });
       // Kind, non-specific copy — no reasons are shared.
-      await notify(client, after, p.user_id, { type: 'join', title: "This one didn't work out", body: `The host couldn't fit you into "${a.title}". Plenty more nearby.`, data: { activityId: a.id, target: { screen: 'discover_home', params: {} } } });
-      publishJoin(after, a.id, p.user_id, 'declined', { requestId: p.id });
-      return { requestId: p.id, state: 'declined' };
+      await notify(session, after, p.userId, { type: 'join', title: "This one didn't work out", body: `The host couldn't fit you into "${a.title}". Plenty more nearby.`, data: { activityId: a._id, target: { screen: 'discover_home', params: {} } } });
+      publishJoin(after, a._id, p.userId, 'declined', { requestId: p._id });
+      return { requestId: p._id, state: 'declined' };
     });
   },
 
   'POST /v1/activities/{activityId}/cancel': async (req) => {
     const user = await requireUser(req);
     const { reason } = check({ reason: { type: 'string', max: 280 } }, req.body);
-    await db.withTransaction(async (client, after) => {
-      const a = await A.lockActivity(client, req.params.activityId);
-      if (a.host_user_id !== user.id) throw err.forbidden('host_only', 'Only the host can cancel the plan. Use DELETE …/join-requests/me to leave.');
+    await db.withTransaction(async (session, after) => {
+      const { Activity, Participant, ReliabilityEvent } = models();
+      const a = await loadActivity(req.params.activityId, session);
+      if (a.hostUserId !== user.id) throw err.forbidden('host_only', 'Only the host can cancel the plan. Use DELETE …/join-requests/me to leave.');
       if (['cancelled', 'completed', 'moderated'].includes(a.status)) throw err.conflict('not_cancellable');
-      await client.query("UPDATE activities SET status = 'cancelled', cancelled_at = now(), cancel_reason = $2 WHERE id = $1", [a.id, reason || null]);
-      const { rows } = await client.query("SELECT user_id FROM activity_participants WHERE activity_id = $1 AND user_id <> $2 AND state IN ('requested','accepted','waitlisted','checked_in')", [a.id, user.id]);
-      await client.query("UPDATE activity_participants SET state = 'cancelled' WHERE activity_id = $1 AND user_id <> $2 AND state IN ('requested','accepted','waitlisted','checked_in')", [a.id, user.id]);
-      if (new Date(a.starts_at).getTime() - Date.now() < 2 * 3600000 && rows.length) {
-        await client.query("INSERT INTO reliability_events (user_id, activity_id, kind) VALUES ($1, $2, 'host_cancel') ON CONFLICT DO NOTHING", [user.id, a.id]);
+      await Activity.updateOne({ _id: a._id }, { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: reason || null, acceptedCount: 1, waitlistCount: 0 } }, { session });
+      const affected = await Participant.find({ activityId: a._id, userId: { $ne: user.id }, state: { $in: A.ACTIVE_STATES } }).select('userId').session(session).lean();
+      await Participant.updateMany({ activityId: a._id, userId: { $ne: user.id }, state: { $in: A.ACTIVE_STATES } }, { $set: { state: 'cancelled', waitlistPosition: null } }, { session });
+      if (new Date(a.startsAt).getTime() - Date.now() < 2 * 3600000 && affected.length) {
+        await ReliabilityEvent.updateOne({ userId: user.id, activityId: a._id, kind: 'host_cancel' }, { $setOnInsert: { userId: user.id, activityId: a._id, kind: 'host_cancel' } }, { upsert: true, session });
       }
-      await A.systemMessage(client, await A.groupConversationId(client, a.id), `${user.displayName} cancelled this plan${reason ? `: ${reason}` : '.'}`);
-      for (const r of rows) {
-        await notify(client, after, r.user_id, { type: 'activity', title: 'Plan cancelled', body: `"${a.title}" was cancelled by the host.`, data: { activityId: a.id, target: { screen: 'activity_detail', params: { id: a.id } } } });
+      const convId = await A.groupConversationId(a._id, { session });
+      publishMessage(after, await A.systemMessage(convId, `${user.displayName} cancelled this plan${reason ? `: ${reason}` : '.'}`, { session }));
+      for (const r of affected) {
+        await notify(session, after, r.userId, { type: 'activity', title: 'Plan cancelled', body: `"${a.title}" was cancelled by the host.`, data: { activityId: a._id, target: { screen: 'activity_detail', params: { id: a._id } } } });
       }
-      await audit(client, { actorUserId: user.id, action: 'activity.cancel', targetType: 'activity', targetId: a.id, metadata: { reason }, ip: req.ip });
-      publishActivity(after, a.id, { status: 'cancelled' });
+      await audit({ actorUserId: user.id, action: 'activity.cancel', targetType: 'activity', targetId: a._id, metadata: { reason }, ip: req.ip }, { session });
+      publishActivity(after, a._id, { status: 'cancelled' });
     });
-    return presentFresh(req.params.activityId, user.id);
+    return A.presentFresh(req.params.activityId, user.id);
   },
 
   'POST /v1/activities/{activityId}/check-ins': async (req) => {
@@ -385,13 +433,16 @@ const routes = {
       },
       req.body
     );
-    return db.withTransaction(async (client, after) => {
-      const a = await A.lockActivity(client, req.params.activityId);
+    return db.withTransaction(async (session, after) => {
+      const { Activity, Participant } = models();
+      const a = await loadActivity(req.params.activityId, session);
       const now = Date.now();
-      if (now < new Date(a.starts_at).getTime() - 30 * 60000 || now > new Date(a.ends_at).getTime() + 30 * 60000) throw err.conflict('checkin_window_closed', 'Check-in is open from 30 minutes before the start until 30 minutes after the end');
+      if (now < new Date(a.startsAt).getTime() - 30 * 60000 || now > new Date(a.endsAt).getTime() + 30 * 60000) {
+        throw err.conflict('checkin_window_closed', 'Check-in is open from 30 minutes before the start until 30 minutes after the end');
+      }
       let target = user.id;
       if (v.method === 'host') {
-        if (a.host_user_id !== user.id) throw err.forbidden('host_only');
+        if (a.hostUserId !== user.id) throw err.forbidden('host_only');
         if (!v.userId) throw err.badRequest('user_required');
         target = v.userId;
       }
@@ -401,36 +452,36 @@ const routes = {
           throw err.conflict('too_far', "You don't seem to be at the venue yet. Use manual check-in instead.");
         }
       }
-      const { rows } = await client.query("SELECT id, state FROM activity_participants WHERE activity_id = $1 AND user_id = $2 AND state IN ('accepted','checked_in') FOR UPDATE", [a.id, target]);
-      if (!rows[0]) throw err.forbidden('not_participant');
-      await client.query("UPDATE activity_participants SET state = 'checked_in', checked_in_at = COALESCE(checked_in_at, now()), check_in_method = $2 WHERE id = $1", [rows[0].id, v.method]);
-      if (a.status === 'open' || a.status === 'full') await client.query("UPDATE activities SET status = 'in_progress' WHERE id = $1 AND starts_at <= now()", [a.id]);
-      publishJoin(after, a.id, target, 'checked_in', { method: v.method });
-      const c = await maybeComplete(client, after, { ...a });
+      const p = await Participant.findOne({ activityId: a._id, userId: target, state: { $in: ['accepted', 'checked_in'] } }).session(session).lean();
+      if (!p) throw err.forbidden('not_participant');
+      await Participant.updateOne({ _id: p._id }, { $set: { state: 'checked_in', checkedInAt: p.checkedInAt || new Date(), checkInMethod: v.method } }, { session });
+      if (['open', 'full'].includes(a.status) && new Date(a.startsAt).getTime() <= now) {
+        await Activity.updateOne({ _id: a._id }, { $set: { status: 'in_progress' } }, { session });
+        a.status = 'in_progress';
+      }
+      publishJoin(after, a._id, target, 'checked_in', { method: v.method });
+      const c = await maybeComplete(session, after, a);
       return { checkedIn: true, method: v.method, verified: v.method !== 'manual', mutual: c.mutual };
     });
   },
 
   'POST /v1/activities/{activityId}/completion-confirmations': async (req) => {
     const user = await requireUser(req);
-    return withIdempotency(db, req, user.id, async () => {
-      const r = await db.withTransaction(async (client, after) => {
-        const a = await A.lockActivity(client, req.params.activityId);
+    return withIdempotency(req, user.id, async () => {
+      const r = await db.withTransaction(async (session, after) => {
+        const { Participant } = models();
+        const a = await loadActivity(req.params.activityId, session);
         if (['cancelled', 'moderated'].includes(a.status)) throw err.conflict('not_completable');
-        if (Date.now() < new Date(a.starts_at).getTime()) throw err.conflict('too_early', 'You can confirm once the plan has started');
-        const { rows } = await client.query(
-          "SELECT id, completion_confirmed_at FROM activity_participants WHERE activity_id = $1 AND user_id = $2 AND state IN ('accepted','checked_in','completed') FOR UPDATE",
-          [a.id, user.id]
-        );
-        if (!rows[0]) throw err.forbidden('not_participant');
-        const duplicate = !!rows[0].completion_confirmed_at;
-        await client.query('UPDATE activity_participants SET completion_confirmed_at = COALESCE(completion_confirmed_at, now()) WHERE id = $1', [rows[0].id]);
-        const c = await maybeComplete(client, after, a);
+        if (Date.now() < new Date(a.startsAt).getTime()) throw err.conflict('too_early', 'You can confirm once the plan has started');
+        const p = await Participant.findOne({ activityId: a._id, userId: user.id, state: { $in: A.IN_GROUP_STATES } }).session(session).lean();
+        if (!p) throw err.forbidden('not_participant');
+        const duplicate = !!p.completionConfirmedAt;
+        if (!duplicate) await Participant.updateOne({ _id: p._id }, { $set: { completionConfirmedAt: new Date() } }, { session });
+        const c = await maybeComplete(session, after, a);
         const mine = c.awards[user.id] || { xp: 0 };
         return { state: c.mutual ? 'completed' : 'confirmed', xpAwarded: mine.xp, duplicate, pendingOthers: !c.mutual, leveledUp: !!mine.level, level: mine.level || null };
       });
-      const { _stats, ...progress } = await require('../services/progress').progressFor(db, user.id);
-      return { ...r, progress };
+      return { ...r, progress: await progressFor(user.id) };
     });
   },
 
@@ -449,25 +500,25 @@ const routes = {
       },
       req.body
     );
-    await db.withTransaction(async (client, after) => {
-      const { rows } = await client.query("SELECT user_id FROM activity_participants WHERE activity_id = $1 AND state IN ('accepted','checked_in','completed','no_show')", [req.params.activityId]);
-      const members = new Set(rows.map((r) => r.user_id));
+    const activityId = String(req.params.activityId);
+    await db.withTransaction(async (session, after) => {
+      const { Participant, ActivityFeedback } = models();
+      const rows = await Participant.find({ activityId, state: { $in: ['accepted', 'checked_in', 'completed', 'no_show'] } }).select('userId').session(session).lean();
+      const members = new Set(rows.map((r) => r.userId));
       if (!members.has(user.id)) throw err.forbidden('not_participant');
-      const { rowCount: done } = await client.query('SELECT 1 FROM activity_feedback WHERE activity_id = $1 AND from_user_id = $2 LIMIT 1', [req.params.activityId, user.id]);
-      if (done) throw err.conflict('already_submitted', 'You already shared feedback for this plan');
+      if (await ActivityFeedback.exists({ activityId, fromUserId: user.id }).session(session)) throw err.conflict('already_submitted', 'You already shared feedback for this plan');
       for (const f of v.about) {
         if (f.userId === user.id || !members.has(f.userId)) continue;
-        await client.query(
-          `INSERT INTO activity_feedback (activity_id, from_user_id, about_user_id, showed_up, rating, note) VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (activity_id, from_user_id, about_user_id) DO UPDATE SET showed_up = EXCLUDED.showed_up, rating = EXCLUDED.rating, note = EXCLUDED.note`,
-          [req.params.activityId, user.id, f.userId, f.showedUp ?? null, f.rating ?? null, f.note || null]
+        await ActivityFeedback.updateOne(
+          { activityId, fromUserId: user.id, aboutUserId: f.userId },
+          { $set: { showedUp: f.showedUp ?? null, rating: f.rating ?? null, note: f.note || null } },
+          { upsert: true, session }
         );
-        after(() => enqueue({ type: 'reliability_recalc', userId: f.userId }));
+        after(() => jobs.enqueue('reliability_recalc', { userId: f.userId }, { dedupeKey: `rr:${f.userId}:fb:${activityId}` }));
       }
     });
     return { ok: true };
   },
 };
 
-exports.maybeComplete = maybeComplete;
-exports.handler = createRouter(routes);
+module.exports = { routes, maybeComplete, promoteWaitlist, takeSeat, releaseSeat };

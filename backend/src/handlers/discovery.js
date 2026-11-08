@@ -1,111 +1,76 @@
 'use strict';
-// Discovery: activities near a point or a chosen area, featured plans,
-// categories, available-now people (coarse only), search, venues, my plans.
-const { createRouter, err } = require('../lib/http');
+// Discovery: activities near a point or a chosen area, featured plans, categories,
+// available-now people (coarse only), search, venues, my plans, my availability.
+const { err } = require('../lib/http');
 const { check } = require('../lib/validate');
-const db = require('../lib/db');
 const { requireUser } = require('../lib/auth');
 const geo = require('../lib/geo');
-const { pageParams, pageOf } = require('../lib/page');
+const { pageParams, encodeCursor } = require('../lib/page');
+const { istDay } = require('../lib/xp');
 const P = require('../lib/present');
 const A = require('../services/activities');
 
-const WHEN = ['any', 'now', 'today', 'tonight', 'tomorrow', 'weekend'];
-const IST_NOW_DATE = "(now() AT TIME ZONE 'Asia/Kolkata')::date";
-const IST_START_DATE = "(a.starts_at AT TIME ZONE 'Asia/Kolkata')::date";
+const models = () => require('../models');
 
-const likeParam = (q) => `%${String(q).replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-
-// Resolve the reference point: device coords, else a named city area, else none (city-wide).
-async function referencePoint(query) {
-  const lat = query.lat != null ? Number(query.lat) : null;
-  const lng = query.lng != null ? Number(query.lng) : null;
-  if (lat != null || lng != null) {
-    if (!geo.isValidCoord(lat, lng)) throw err.badRequest('invalid_location');
-    return { lat, lng };
-  }
-  if (query.area) {
-    const row = await db.one('SELECT ST_Y(centroid::geometry) AS lat, ST_X(centroid::geometry) AS lng FROM city_areas WHERE active AND lower(name) = lower($1) LIMIT 1', [query.area]);
-    if (row) return { lat: row.lat, lng: row.lng, area: query.area };
-  }
-  return null;
+// Fetch limit+1 rows, present the first `limit` (hidden hosts dropped), cursor by offset.
+async function pageActivities(rows, page, viewerId, opts) {
+  const more = rows.length > page.limit;
+  const items = await A.presentMany(rows.slice(0, page.limit), viewerId, opts);
+  return { items, nextCursor: more ? encodeCursor({ o: page.offset + page.limit }) : null };
 }
-
-function whenClause(when) {
-  switch (when) {
-    case 'now':
-      return "a.starts_at <= now() + interval '90 minutes'";
-    case 'today':
-      return `${IST_START_DATE} = ${IST_NOW_DATE}`;
-    case 'tonight':
-      return `${IST_START_DATE} = ${IST_NOW_DATE} AND extract(hour FROM a.starts_at AT TIME ZONE 'Asia/Kolkata') >= 17`;
-    case 'tomorrow':
-      return `${IST_START_DATE} = ${IST_NOW_DATE} + 1`;
-    case 'weekend':
-      return `${IST_START_DATE} BETWEEN ${IST_NOW_DATE} AND ${IST_NOW_DATE} + 7 AND extract(isodow FROM a.starts_at AT TIME ZONE 'Asia/Kolkata') IN (6, 7)`;
-    default:
-      return null;
-  }
-}
-
-// Shared activity search used by /activities, /activities/featured, /search and the assistant.
-async function findActivities(viewerId, { point, radiusKm, category, when, q, limit, offset, order = 'time', notFull = false }) {
-  const params = [viewerId];
-  const add = (v) => (params.push(v), `$${params.length}`);
-  let distanceSql = 'NULL::float8';
-  const where = [A.VISIBLE_TO_VIEWER, A.NOT_BLOCKED, "a.status IN ('open','full','in_progress')", 'a.ends_at > now()'];
-  if (point) {
-    const pt = `ST_SetSRID(ST_MakePoint(${add(point.lng)}, ${add(point.lat)}), 4326)::geography`;
-    distanceSql = `ST_Distance(a.geog, ${pt})`;
-    where.push(`ST_DWithin(a.geog, ${pt}, ${add(geo.clampRadiusKm(radiusKm) * 1000)})`);
-  }
-  if (category) where.push(`c.slug = ${add(category)}`);
-  const w = whenClause(when);
-  if (w) where.push(w);
-  if (q) {
-    const p = add(likeParam(q));
-    where.push(`(a.title ILIKE ${p} OR a.description ILIKE ${p} OR a.coarse_area ILIKE ${p} OR c.label ILIKE ${p} OR EXISTS (SELECT 1 FROM unnest(a.tags) t WHERE t ILIKE ${p}))`);
-  }
-  if (notFull) where.push("a.status = 'open'");
-  const orderSql =
-    order === 'featured'
-      ? `(a.starts_at <= now() + interval '30 minutes') DESC, hp.reliability_score DESC, distance_m ASC NULLS LAST, a.starts_at ASC`
-      : 'a.starts_at ASC, distance_m ASC NULLS LAST';
-  const sql = `SELECT ${A.SELECT_COLUMNS}, ${distanceSql} AS distance_m ${A.FROM}
-     WHERE ${where.join(' AND ')}
-     ORDER BY ${orderSql}
-     LIMIT ${add(limit)} OFFSET ${add(offset)}`;
-  const { rows } = await db.query(sql, params);
-  return rows;
-}
-
-const presentRow = (viewerId, featured) => (r) => A.present(r, { viewerId, distanceM: r.distance_m == null ? null : Number(r.distance_m), featured });
 
 async function availabilityOf(userId) {
-  const r = await db.one('SELECT status, activity_slugs, area, available_until FROM availability_status WHERE user_id = $1', [userId]);
-  if (!r) return { status: 'busy', activities: [], until: null, area: null };
-  const expired = r.available_until && new Date(r.available_until) < new Date();
-  return { status: expired ? 'busy' : r.status, activities: r.activity_slugs, until: r.available_until, area: r.area };
+  const { User } = models();
+  const u = await User.findById(userId).select('availability').lean();
+  const av = (u && u.availability) || {};
+  if (!av.status) return { status: 'busy', activities: [], until: null, area: null };
+  const expired = av.until && new Date(av.until) < new Date();
+  return { status: expired ? 'busy' : av.status, activities: av.activitySlugs || [], until: av.until || null, area: av.area || null };
 }
 
-function presentVenue(r) {
+async function completedCounts(userIds) {
+  const { Participant } = models();
+  if (!userIds.length) return new Map();
+  const rows = await Participant.aggregate([{ $match: { userId: { $in: userIds }, state: 'completed' } }, { $group: { _id: '$userId', n: { $sum: 1 } } }]);
+  return new Map(rows.map((r) => [r._id, r.n]));
+}
+
+// Venues ---------------------------------------------------------------------
+async function venueExtras(venues) {
+  const { BusinessProfile, SponsoredCampaign } = models();
+  const bizIds = [...new Set(venues.map((v) => v.businessId).filter(Boolean))];
+  const [biz, active] = await Promise.all([
+    bizIds.length ? BusinessProfile.find({ _id: { $in: bizIds } }).select('name verificationStatus').lean() : [],
+    bizIds.length ? SponsoredCampaign.distinct('businessId', { businessId: { $in: bizIds }, status: 'active' }) : [],
+  ]);
+  return { biz: new Map(biz.map((b) => [b._id, b])), sponsored: new Set(active) };
+}
+
+function presentVenue(v, { biz, sponsored } = { biz: new Map(), sponsored: new Set() }) {
+  const b = v.businessId ? biz.get(v.businessId) : null;
   return {
-    id: r.id,
-    name: r.name,
-    area: r.area,
-    address: r.address,
-    venueType: r.venue_type,
-    categories: r.category_slugs || [],
-    description: r.description,
-    offers: r.offers || [],
-    bookingUrl: r.booking_url,
-    verified: r.verified,
-    sponsored: !!r.sponsored,
-    latitude: r.latitude, // venues are public businesses; exact location is intended
-    longitude: r.longitude,
-    distanceM: r.distance_m != null ? geo.coarseDistanceMeters(Number(r.distance_m)) : null,
-    business: r.business_id ? { id: r.business_id, name: r.business_name, verified: r.verification_status === 'verified' } : null,
+    id: v._id,
+    name: v.name,
+    area: v.area || null,
+    address: v.address || null,
+    venueType: v.venueType || null,
+    categories: v.categorySlugs || [],
+    description: v.description || null,
+    offers: v.offers || [],
+    bookingUrl: v.bookingUrl || null,
+    verified: !!v.verified,
+    sponsored: !!(v.businessId && sponsored.has(v.businessId)),
+    latitude: v.latitude ?? null, // venues are public businesses; exact location is intended
+    longitude: v.longitude ?? null,
+    distanceM: v.distanceM != null ? geo.coarseDistanceMeters(Number(v.distanceM)) : null,
+    business: v.businessId ? { id: v.businessId, name: b ? b.name : null, verified: !!b && b.verificationStatus === 'verified' } : null,
   };
+}
+
+async function verifiedBusinessFilter() {
+  const { BusinessProfile } = models();
+  const unverified = await BusinessProfile.distinct('_id', { verificationStatus: { $ne: 'verified' } });
+  return { $or: [{ businessId: null }, { businessId: { $nin: unverified } }] };
 }
 
 const routes = {
@@ -115,49 +80,43 @@ const routes = {
       {
         radius: { type: 'number', min: 0.2, max: geo.MAX_RADIUS_KM },
         category: { type: 'string', format: 'slug' },
-        when: { type: 'string', enum: WHEN, default: 'any' },
+        when: { type: 'string', enum: A.WHEN, default: 'any' },
         q: { type: 'string', max: 80 },
       },
       req.query
     );
-    const point = await referencePoint(req.query);
+    const point = await A.referencePoint(req.query);
     const page = pageParams(req.query);
-    const rows = await findActivities(user.id, { point, radiusKm: q.radius, category: q.category, when: q.when, q: q.q, limit: page.sqlLimit, offset: page.offset });
-    return pageOf(rows, page, presentRow(user.id, false));
+    const rows = await A.findActivities(user.id, { point, radiusKm: q.radius, category: q.category, when: q.when, q: q.q, limit: page.fetchLimit, offset: page.offset });
+    return pageActivities(rows, page, user.id);
   },
 
   'GET /v1/activities/featured': async (req) => {
     const user = await requireUser(req);
-    const point = await referencePoint(req.query);
-    const rows = await findActivities(user.id, { point, radiusKm: req.query.radius, limit: 3, offset: 0, order: 'featured', notFull: true });
-    return { items: rows.map(presentRow(user.id, true)), nextCursor: null };
+    const point = await A.referencePoint(req.query);
+    const rows = await A.findActivities(user.id, { point, radiusKm: req.query.radius, limit: 3, offset: 0, order: 'featured', notFull: true });
+    return { items: await A.presentMany(rows, user.id, { featured: true }), nextCursor: null };
   },
 
   'GET /v1/activities/categories': async (req) => {
     await requireUser(req, { allowSuspended: true });
-    const rows = await db.many('SELECT slug, label, short, pictogram, risk_level FROM activity_categories WHERE is_active AND risk_level <> $1 ORDER BY sort_order, label', ['restricted']);
+    const { Category } = models();
+    const rows = await Category.find({ isActive: true, riskLevel: { $ne: 'restricted' } }).sort({ sortOrder: 1, label: 1 }).lean();
     return { items: rows.map(P.category), nextCursor: null };
   },
 
   'GET /v1/activities/{activityId}': async (req) => {
     const user = await requireUser(req);
-    const point = await referencePoint(req.query).catch(() => null);
-    const params = [user.id, req.params.activityId];
-    let dist = 'NULL::float8';
-    if (point) {
-      params.push(point.lng, point.lat);
-      dist = 'ST_Distance(a.geog, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography)';
-    }
-    const row = await db.one(`SELECT ${A.SELECT_COLUMNS}, ${dist} AS distance_m ${A.FROM} WHERE a.id = $2 AND ${A.VISIBLE_TO_VIEWER} AND ${A.NOT_BLOCKED}`, params);
-    if (!row) throw err.notFound('activity_not_found');
-    if (row.host_user_id !== user.id) {
+    const point = await A.referencePoint(req.query).catch(() => null);
+    const doc = await A.getVisible(req.params.activityId, user.id, { point });
+    if (!doc) throw err.notFound('activity_not_found');
+    if (doc.hostUserId !== user.id) {
       // Plan views feed venue analytics (counts only; viewers are not recorded).
-      await db.query(
-        "INSERT INTO activity_daily_metrics (activity_id, day, views) VALUES ($1, (now() AT TIME ZONE 'Asia/Kolkata')::date, 1) ON CONFLICT (activity_id, day) DO UPDATE SET views = activity_daily_metrics.views + 1",
-        [row.id]
-      ).catch(() => {});
+      const { ActivityDailyMetric } = models();
+      await ActivityDailyMetric.updateOne({ activityId: doc._id, day: istDay() }, { $inc: { views: 1 } }, { upsert: true }).catch(() => {});
     }
-    return presentRow(user.id, false)(row);
+    const [a] = await A.presentMany([doc], user.id, { keepHidden: true });
+    return a;
   },
 
   'PUT /v1/me/availability': async (req) => {
@@ -177,146 +136,158 @@ const routes = {
     if (v.status === 'now' && !until) until = new Date(Date.now() + 2 * 3600000).toISOString();
     if (until && new Date(until).getTime() > Date.now() + 24 * 3600000) throw err.badRequest('until_too_far', 'Availability can be set up to 24 hours ahead');
     // Only a ~1.2 km geohash cell is stored; the precise point is discarded here.
-    let geohashSql = 'NULL';
-    const params = [user.id, v.status, v.activities, until, v.area || null];
-    if (v.lat != null && v.lng != null) {
-      params.push(v.lng, v.lat);
-      geohashSql = 'ST_GeoHash(ST_SetSRID(ST_MakePoint($6, $7), 4326), 6)';
-    } else if (v.area) {
-      geohashSql = "(SELECT ST_GeoHash(centroid::geometry, 6) FROM city_areas WHERE lower(name) = lower($5) LIMIT 1)";
+    let cell = null;
+    if (v.lat != null && v.lng != null) cell = geo.cellId(v.lat, v.lng);
+    else if (v.area) {
+      const p = await A.referencePoint({ area: v.area });
+      if (p) cell = geo.cellId(p.lat, p.lng);
     }
-    await db.query(
-      `INSERT INTO availability_status (user_id, status, activity_slugs, available_until, area, coarse_geohash, updated_at)
-       VALUES ($1, $2, $3, $4, $5, ${geohashSql}, now())
-       ON CONFLICT (user_id) DO UPDATE SET status = EXCLUDED.status, activity_slugs = EXCLUDED.activity_slugs,
-         available_until = EXCLUDED.available_until, area = COALESCE(EXCLUDED.area, availability_status.area),
-         coarse_geohash = COALESCE(EXCLUDED.coarse_geohash, availability_status.coarse_geohash), updated_at = now()`,
-      params
-    );
+    const { User } = models();
+    const set = {
+      'availability.status': v.status,
+      'availability.activitySlugs': v.activities,
+      'availability.until': until ? new Date(until) : null,
+      'availability.updatedAt': new Date(),
+    };
+    if (v.area) set['availability.area'] = v.area;
+    if (cell) set['availability.coarseCell'] = cell;
+    await User.updateOne({ _id: user.id }, { $set: set });
     return availabilityOf(user.id);
   },
 
   'GET /v1/availability/nearby': async (req) => {
     const user = await requireUser(req);
-    const point = await referencePoint(req.query);
+    const point = await A.referencePoint(req.query);
     if (!point) throw err.badRequest('location_required', 'Send lat/lng or choose an area');
     const page = pageParams(req.query, { def: 20, max: 50 });
-    const radiusM = geo.clampRadiusKm(req.query.radius) * 1000;
-    const rows = await db.many(
-      `SELECT u.id, p.display_name, p.avatar_key, p.reliability_score, p.interests, av.area, av.status AS availability_status, av.activity_slugs,
-              COALESCE(up.level, 1) AS level,
-              (SELECT count(*)::int FROM activity_participants x WHERE x.user_id = u.id AND x.state = 'completed') AS completed,
-              ST_Distance(ST_PointFromGeoHash(av.coarse_geohash)::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography) AS distance_m
-         FROM availability_status av
-         JOIN app_users u ON u.id = av.user_id AND u.status = 'active'
-         JOIN profiles p ON p.user_id = u.id AND p.visibility = 'discoverable' AND COALESCE((p.preferences->>'showOnRadar')::boolean, TRUE)
-         LEFT JOIN user_progress up ON up.user_id = u.id
-        WHERE av.status IN ('now','later') AND (av.available_until IS NULL OR av.available_until > now())
-          AND av.coarse_geohash IS NOT NULL AND u.id <> $1
-          AND ST_DWithin(ST_PointFromGeoHash(av.coarse_geohash)::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)
-          AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = $1 AND b.blocked_user_id = u.id) OR (b.blocker_user_id = u.id AND b.blocked_user_id = $1))
-        ORDER BY (av.status = 'now') DESC, distance_m ASC
-        LIMIT $5 OFFSET $6`,
-      [user.id, point.lng, point.lat, radiusM, page.sqlLimit, page.offset]
-    );
-    const items = await Promise.all(rows.slice(0, page.limit).map((r) => P.publicUser(r, { distanceM: Number(r.distance_m) })));
-    return { items, nextCursor: pageOf(rows, page).nextCursor };
+    const radiusKm = geo.clampRadiusKm(req.query.radius);
+    const { User } = models();
+    const scope = await A.viewerScope(user.id);
+    const prefixes = A.coveringPrefixes(point.lat, point.lng, radiusKm);
+    const now = new Date();
+    const candidates = await User.find({
+      _id: { $nin: [user.id, ...scope.blocked] },
+      status: 'active',
+      'profile.visibility': 'discoverable',
+      'profile.preferences.showOnRadar': { $ne: false },
+      'availability.status': { $in: ['now', 'later'] },
+      $or: [{ 'availability.until': null }, { 'availability.until': { $gt: now } }],
+      'availability.coarseCell': { $in: prefixes.map((p) => new RegExp(`^${p}`)) },
+    })
+      .select('profile progress availability')
+      .limit(1000)
+      .lean();
+    const withDist = candidates
+      .map((u) => {
+        const c = A.geohashCenter(u.availability.coarseCell);
+        return c ? { u, d: geo.haversineMeters({ latitude: point.lat, longitude: point.lng }, c) } : null;
+      })
+      .filter((x) => x && x.d <= radiusKm * 1000)
+      .sort((a, b) => (b.u.availability.status === 'now') - (a.u.availability.status === 'now') || a.d - b.d);
+    const slice = withDist.slice(page.offset, page.offset + page.limit);
+    const counts = await completedCounts(slice.map((x) => x.u._id));
+    const items = await Promise.all(slice.map((x) => P.publicUser(x.u, { distanceM: x.d, completed: counts.get(x.u._id) || 0, area: x.u.availability.area || undefined })));
+    return { items, nextCursor: withDist.length > page.offset + page.limit ? encodeCursor({ o: page.offset + page.limit }) : null };
   },
 
   'GET /v1/me/activities': async (req) => {
     const user = await requireUser(req);
     const { tab } = check({ tab: { type: 'string', enum: ['hosted', 'joined', 'past', 'cancelled'], default: 'joined' } }, req.query);
     const page = pageParams(req.query);
-    const cond = {
-      hosted: "a.host_user_id = $1 AND a.status NOT IN ('cancelled','moderated') AND a.ends_at > now() - interval '6 hours'",
-      joined: "a.host_user_id <> $1 AND my.state IN ('requested','accepted','waitlisted','checked_in') AND a.status NOT IN ('cancelled','moderated') AND a.ends_at > now()",
-      past: "(my.state IN ('accepted','checked_in','completed','no_show')) AND (a.ends_at <= now() OR a.status = 'completed')",
-      cancelled: "((a.host_user_id = $1 AND a.status IN ('cancelled','moderated')) OR my.state IN ('cancelled','declined'))",
+    const { Participant, Activity } = models();
+    const mine = await Participant.find({ userId: user.id }).select('activityId state').lean();
+    const idsIn = (states) => mine.filter((m) => states.includes(m.state)).map((m) => m.activityId);
+    const allIds = mine.map((m) => m.activityId);
+    const now = new Date();
+    const filter = {
+      hosted: { _id: { $in: allIds }, hostUserId: user.id, status: { $nin: ['cancelled', 'moderated'] }, endsAt: { $gt: new Date(now.getTime() - 6 * 3600000) } },
+      joined: { _id: { $in: idsIn(['requested', 'accepted', 'waitlisted', 'checked_in']) }, hostUserId: { $ne: user.id }, status: { $nin: ['cancelled', 'moderated'] }, endsAt: { $gt: now } },
+      past: { _id: { $in: idsIn(['accepted', 'checked_in', 'completed', 'no_show']) }, $or: [{ endsAt: { $lte: now } }, { status: 'completed' }] },
+      cancelled: { $or: [{ _id: { $in: allIds }, hostUserId: user.id, status: { $in: ['cancelled', 'moderated'] } }, { _id: { $in: idsIn(['cancelled', 'declined']) } }] },
     }[tab];
-    const orderDir = tab === 'past' || tab === 'cancelled' ? 'DESC' : 'ASC';
-    const rows = await db.many(`SELECT ${A.SELECT_COLUMNS}, NULL::float8 AS distance_m ${A.FROM} WHERE my.user_id = $1 AND ${cond} ORDER BY a.starts_at ${orderDir} LIMIT $2 OFFSET $3`, [
-      user.id,
-      page.sqlLimit,
-      page.offset,
-    ]);
-    return pageOf(rows, page, presentRow(user.id, false));
+    const dir = tab === 'past' || tab === 'cancelled' ? -1 : 1;
+    const rows = await Activity.find(filter).sort({ startsAt: dir, _id: dir }).skip(page.offset).limit(page.fetchLimit).lean();
+    return pageActivities(rows, page, user.id, { keepHidden: true });
   },
 
   'GET /v1/search': async (req) => {
     const user = await requireUser(req);
     const { q } = check({ q: { type: 'string', required: true, min: 2, max: 80 } }, req.query);
-    const point = await referencePoint(req.query).catch(() => null);
-    const like = likeParam(q);
+    const point = await A.referencePoint(req.query).catch(() => null);
+    const re = new RegExp(A.escapeRegex(q), 'i');
+    const { User, Venue } = models();
+    const scope = await A.viewerScope(user.id);
     const [acts, people, venues] = await Promise.all([
-      findActivities(user.id, { point, radiusKm: req.query.radius || geo.MAX_RADIUS_KM, q, limit: 10, offset: 0 }),
-      db.many(
-        `SELECT u.id, p.display_name, p.avatar_key, p.reliability_score, p.interests, p.home_area AS area,
-                COALESCE(av.status, 'busy') AS availability_status, av.activity_slugs, COALESCE(up.level, 1) AS level,
-                (SELECT count(*)::int FROM activity_participants x WHERE x.user_id = u.id AND x.state = 'completed') AS completed
-           FROM profiles p JOIN app_users u ON u.id = p.user_id AND u.status = 'active'
-           LEFT JOIN availability_status av ON av.user_id = u.id AND (av.available_until IS NULL OR av.available_until > now())
-           LEFT JOIN user_progress up ON up.user_id = u.id
-          WHERE p.visibility = 'discoverable' AND p.display_name ILIKE $2 AND u.id <> $1
-            AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = $1 AND b.blocked_user_id = u.id) OR (b.blocker_user_id = u.id AND b.blocked_user_id = $1))
-          ORDER BY p.display_name LIMIT 10`,
-        [user.id, like]
-      ),
-      db.many(
-        `SELECT v.*, b.name AS business_name, b.verification_status, EXISTS (SELECT 1 FROM sponsored_campaigns sc WHERE sc.business_id = v.business_id AND sc.status = 'active') AS sponsored, NULL::float8 AS distance_m FROM venues v LEFT JOIN business_profiles b ON b.id = v.business_id
-          WHERE v.verified AND (v.name ILIKE $1 OR v.area ILIKE $1) ORDER BY v.name LIMIT 10`,
-        [like]
-      ),
+      A.findActivities(user.id, { point, radiusKm: req.query.radius || geo.MAX_RADIUS_KM, q, limit: 10, offset: 0 }),
+      User.find({ _id: { $nin: [user.id, ...scope.blocked] }, status: 'active', 'profile.visibility': 'discoverable', 'profile.displayName': re })
+        .select('profile progress availability')
+        .sort({ 'profile.displayName': 1 })
+        .limit(10)
+        .lean(),
+      Venue.find({ verified: true, $or: [{ name: re }, { area: re }] })
+        .sort({ name: 1 })
+        .limit(10)
+        .lean(),
     ]);
+    const counts = await completedCounts(people.map((u) => u._id));
+    const extras = await venueExtras(venues);
     return {
-      activities: acts.map(presentRow(user.id, false)),
-      people: await Promise.all(people.map((r) => P.publicUser(r))),
-      venues: venues.map(presentVenue),
+      activities: await A.presentMany(acts, user.id),
+      people: await Promise.all(people.map((u) => P.publicUser(u, { completed: counts.get(u._id) || 0, area: (u.profile && u.profile.homeArea) || undefined }))),
+      venues: venues.map((v) => presentVenue(v, extras)),
     };
   },
 
   'GET /v1/venues': async (req) => {
     await requireUser(req);
     const q = check({ category: { type: 'string', format: 'slug' } }, req.query);
-    const point = await referencePoint(req.query).catch(() => null);
+    const point = await A.referencePoint(req.query).catch(() => null);
     const page = pageParams(req.query);
-    const params = [q.category || null, page.sqlLimit, page.offset];
-    let dist = 'NULL::float8';
+    const { Venue } = models();
+    const filter = { $and: [{ verified: true, isPublicPlace: true }, await verifiedBusinessFilter(), ...(q.category ? [{ categorySlugs: q.category }] : [])] };
+    let rows;
     if (point) {
-      params.push(point.lng, point.lat);
-      dist = 'ST_Distance(v.geog, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography)';
+      rows = await Venue.aggregate([
+        geo.geoNearStage(point.lat, point.lng, geo.MAX_RADIUS_KM, { query: filter }),
+        { $sort: { distanceM: 1, name: 1 } },
+        { $skip: page.offset },
+        { $limit: page.fetchLimit },
+      ]);
+      // Venues without coordinates are listed after the nearby ones.
+      if (rows.length < page.fetchLimit) {
+        const nearIds = rows.map((r) => r._id);
+        const rest = await Venue.find({ $and: [filter, { location: { $exists: false } }, { _id: { $nin: nearIds } }] })
+          .sort({ name: 1 })
+          .limit(page.fetchLimit - rows.length)
+          .lean();
+        rows = rows.concat(rest);
+      }
+    } else {
+      rows = await Venue.find(filter).sort({ name: 1 }).skip(page.offset).limit(page.fetchLimit).lean();
     }
-    const rows = await db.many(
-      `SELECT v.*, b.name AS business_name, b.verification_status, EXISTS (SELECT 1 FROM sponsored_campaigns sc WHERE sc.business_id = v.business_id AND sc.status = 'active') AS sponsored, ${dist} AS distance_m
-         FROM venues v LEFT JOIN business_profiles b ON b.id = v.business_id
-        WHERE v.verified AND v.is_public_place AND ($1::text IS NULL OR $1 = ANY (v.category_slugs))
-          AND (b.id IS NULL OR b.verification_status = 'verified')
-        ORDER BY distance_m ASC NULLS LAST, v.name LIMIT $2 OFFSET $3`,
-      params
-    );
-    return pageOf(rows, page, presentVenue);
+    const more = rows.length > page.limit;
+    const list = rows.slice(0, page.limit);
+    const extras = await venueExtras(list);
+    return { items: list.map((v) => presentVenue(v, extras)), nextCursor: more ? encodeCursor({ o: page.offset + page.limit }) : null };
   },
 
   'GET /v1/venues/{venueId}': async (req) => {
     const user = await requireUser(req);
-    const v = await db.one(
-      `SELECT v.*, b.name AS business_name, b.verification_status, EXISTS (SELECT 1 FROM sponsored_campaigns sc WHERE sc.business_id = v.business_id AND sc.status = 'active') AS sponsored, NULL::float8 AS distance_m
-         FROM venues v LEFT JOIN business_profiles b ON b.id = v.business_id WHERE v.id = $1 AND v.verified`,
-      [req.params.venueId]
-    );
+    const { Venue, Activity } = models();
+    const v = await Venue.findOne({ _id: String(req.params.venueId), verified: true }).lean();
     if (!v) throw err.notFound('venue_not_found');
-    const upcoming = await db.many(
-      `SELECT ${A.SELECT_COLUMNS}, NULL::float8 AS distance_m ${A.FROM}
-        WHERE ${A.VISIBLE_TO_VIEWER} AND ${A.NOT_BLOCKED} AND a.status IN ('open','full') AND a.ends_at > now()
-          AND (a.venue_name = $2 OR (a.geog IS NOT NULL AND $3::geography IS NOT NULL AND ST_DWithin(a.geog, $3::geography, 75)))
-        ORDER BY a.starts_at LIMIT 10`,
-      [user.id, v.name, v.geog]
-    );
-    return { ...presentVenue(v), upcomingPlans: upcoming.map(presentRow(user.id, false)) };
+    const scope = await A.viewerScope(user.id);
+    const match = [{ venueId: v._id }, { venueName: v.name }];
+    if (v.location) match.push({ location: { $geoWithin: { $centerSphere: [v.location.coordinates, 0.075 / 6378.1] } } });
+    const upcoming = await Activity.find({
+      $and: [A.visibleFilter(scope), { status: { $in: ['open', 'full'] } }, { endsAt: { $gt: new Date() } }, { $or: match }],
+    })
+      .sort({ startsAt: 1 })
+      .limit(10)
+      .lean();
+    const extras = await venueExtras([v]);
+    return { ...presentVenue(v, extras), upcomingPlans: await A.presentMany(upcoming, user.id) };
   },
 };
 
-exports.findActivities = findActivities;
-exports.referencePoint = referencePoint;
-exports.presentVenue = presentVenue;
-exports.availabilityOf = availabilityOf;
-exports.handler = createRouter(routes);
+module.exports = { routes, availabilityOf, presentVenue, venueExtras, findActivities: A.findActivities, referencePoint: A.referencePoint };

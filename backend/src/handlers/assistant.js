@@ -1,19 +1,18 @@
 'use strict';
 // POST /v1/assistant/suggest — the IRL Guide.
-// Grounded: Claude only sees real nearby plans queried from Postgres (public
+// Grounded: Claude only sees real nearby plans queried from MongoDB (public
 // fields only) and may only return ids from that list. It suggests; it never
 // messages people, impersonates users or makes safety decisions. Dating,
 // companionship and escort intents are refused. Daily quota enforced server-side.
-const { createRouter, err } = require('../lib/http');
+const { err } = require('../lib/http');
 const { check } = require('../lib/validate');
-const db = require('../lib/db');
 const { requireUser } = require('../lib/auth');
 const ent = require('../lib/entitlements');
 const geo = require('../lib/geo');
 const { istDate } = require('../lib/quests');
-const { MODEL, getClient, Anthropic } = require('../lib/anthropic');
+const anthropic = require('../lib/anthropic');
+const logger = require('../logger');
 const A = require('../services/activities');
-const { findActivities } = require('./discovery');
 
 const QUOTA = { free: 16, plus: 60, pro: 150 };
 const WHEN = ['now', 'in15', 'tonight', 'tomorrow', 'weekend', 'custom'];
@@ -22,25 +21,37 @@ const WHEN = ['now', 'in15', 'tonight', 'tomorrow', 'weekend', 'custom'];
 const BLOCKED_INTENT = /\b(dating|(on a|for a|romantic|blind|dinner) date\b|girlfriend|boyfriend|hook ?up|escort|call ?girl|sugar (daddy|baby)|paid compan|rent a (girl|boy|friend)|one[- ]night|flirt|sexy|nsfw|massage (girl|parlou?r))/i;
 const REFUSAL_REPLY = "IRL is for platonic plans — chai, sports, walks, study and more. I can't help with dating or paid companionship, but I can find something fun to do nearby.";
 
+const models = () => require('../models');
+
 function quotaFor(ents) {
   if (ents.includes('pro')) return QUOTA.pro;
   if (ents.includes('plus')) return QUOTA.plus;
   return QUOTA.free;
 }
 
+// Atomically take one prompt from today's quota. Returns the new count, or null when exhausted.
 async function consumeQuota(userId, limit) {
+  const { AssistantUsage } = models();
   const day = istDate();
-  const { rows } = await db.query(
-    `INSERT INTO assistant_usage (user_id, day, count) VALUES ($1, $2, 1)
-     ON CONFLICT (user_id, day) DO UPDATE SET count = assistant_usage.count + 1 WHERE assistant_usage.count < $3
-     RETURNING count`,
-    [userId, day, limit]
-  );
-  return rows[0] ? rows[0].count : null;
+  try {
+    const doc = await AssistantUsage.findOneAndUpdate({ userId, day, count: { $lt: limit } }, { $inc: { count: 1 } }, { upsert: true, new: true }).lean();
+    return doc ? doc.count : null;
+  } catch (e) {
+    // The filter didn't match an existing (exhausted) row → the upsert hit the unique index.
+    if (e && e.code === 11000) return null;
+    throw e;
+  }
 }
 
 async function refundQuota(userId) {
-  await db.query('UPDATE assistant_usage SET count = GREATEST(0, count - 1) WHERE user_id = $1 AND day = $2', [userId, istDate()]).catch(() => {});
+  const { AssistantUsage } = models();
+  await AssistantUsage.updateOne({ userId, day: istDate(), count: { $gt: 0 } }, { $inc: { count: -1 } }).catch(() => {});
+}
+
+async function usedToday(userId) {
+  const { AssistantUsage } = models();
+  const r = await AssistantUsage.findOne({ userId, day: istDate() }).select('count').lean();
+  return r ? r.count : 0;
 }
 
 function istNowLabel() {
@@ -117,15 +128,14 @@ const routes = {
       },
       req.body
     );
-    const ents = await ent.getActive(db, user.id);
+    const ents = await ent.getActive(user.id);
     const limit = quotaFor(ents);
 
     if (BLOCKED_INTENT.test(v.prompt)) {
-      const used = await db.one('SELECT count FROM assistant_usage WHERE user_id = $1 AND day = $2', [user.id, istDate()]);
-      throw err.unprocessable('unsupported_intent', REFUSAL_REPLY, { promptsLeft: Math.max(0, limit - (used ? used.count : 0)) });
+      throw err.unprocessable('unsupported_intent', REFUSAL_REPLY, { promptsLeft: Math.max(0, limit - (await usedToday(user.id))) });
     }
 
-    const client = await getClient();
+    const client = await anthropic.getClient();
     if (!client) throw err.unavailable('assistant_not_configured', 'The guide is not configured on the server yet. You can still browse and create plans.');
 
     const count = await consumeQuota(user.id, limit);
@@ -134,26 +144,25 @@ const routes = {
     try {
       let point = null;
       if (v.lat != null && v.lng != null) point = { lat: v.lat, lng: v.lng };
-      else if (v.area) {
-        const r = await db.one('SELECT ST_Y(centroid::geometry) AS lat, ST_X(centroid::geometry) AS lng FROM city_areas WHERE active AND lower(name) = lower($1) LIMIT 1', [v.area]);
-        if (r) point = { lat: r.lat, lng: r.lng };
-      }
-      const rows = await findActivities(user.id, { point, radiusKm: v.radiusKm, limit: 25, offset: 0 });
-      const activities = rows.map((r) => A.present(r, { viewerId: user.id, distanceM: r.distance_m == null ? null : Number(r.distance_m) })).filter((a) => !a.hostedByMe && !a.myJoinState);
+      else if (v.area) point = await A.referencePoint({ area: v.area });
+      const rows = await A.findActivities(user.id, { point, radiusKm: v.radiusKm, limit: 25, offset: 0 });
+      const activities = (await A.presentMany(rows, user.id)).filter((a) => !a.hostedByMe && !a.myJoinState);
+      const { User, Category } = models();
       const [me, cats] = await Promise.all([
-        db.one('SELECT interests, home_area FROM profiles WHERE user_id = $1', [user.id]),
-        db.many("SELECT slug FROM activity_categories WHERE is_active AND risk_level <> 'restricted' ORDER BY sort_order"),
+        User.findById(user.id).select('profile.interests profile.homeArea').lean(),
+        Category.find({ isActive: true, riskLevel: { $ne: 'restricted' } }).sort({ sortOrder: 1 }).select('slug').lean(),
       ]);
       const slugs = cats.map((c) => c.slug);
+      const profile = (me && me.profile) || {};
 
       const context = {
         nowIST: istNowLabel(),
-        user: { interests: (me && me.interests) || [], area: v.area || (me && me.home_area) || null },
+        user: { interests: profile.interests || [], area: v.area || profile.homeArea || null },
         plans: activities.map(contextActivity),
       };
 
       const response = await client.beta.messages.create({
-        model: MODEL,
+        model: anthropic.MODEL,
         max_tokens: 2000,
         betas: ['server-side-fallback-2026-07-01'],
         fallbacks: 'default',
@@ -166,7 +175,10 @@ const routes = {
         // quota is refunded by the catch below
         throw err.unprocessable('unsupported_intent', REFUSAL_REPLY, { promptsLeft: Math.max(0, limit - count + 1) });
       }
-      const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+      const text = (response.content || [])
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
       let out;
       try {
         out = JSON.parse(text);
@@ -180,9 +192,9 @@ const routes = {
       }
       // Grounding guard: keep only ids we actually provided.
       const byId = new Map(activities.map((a) => [a.id, a]));
-      const ids = out.refused ? [] : [...new Set((out.activityIds || []).filter((id) => byId.has(id)))].slice(0, 3);
+      const ids = [...new Set((out.activityIds || []).filter((id) => byId.has(id)))].slice(0, 3);
       let draft = null;
-      if (!out.refused && out.includeDraft && out.draft && slugs.includes(out.draft.category)) {
+      if (out.includeDraft && out.draft && slugs.includes(out.draft.category)) {
         draft = {
           category: out.draft.category,
           title: String(out.draft.title || '').slice(0, 80),
@@ -192,8 +204,8 @@ const routes = {
         };
       }
       return {
-        reply: out.refused ? out.reply || REFUSAL_REPLY : out.reply,
-        refused: !!out.refused,
+        reply: out.reply,
+        refused: false,
         activityIds: ids,
         activities: ids.map((id) => byId.get(id)),
         draft,
@@ -201,12 +213,15 @@ const routes = {
         model: response.model,
       };
     } catch (e) {
-      // Don't charge the user's quota for our failures.
+      // Don't charge the user's quota for our failures or refusals.
       await refundQuota(user.id);
-      if (e instanceof Anthropic.RateLimitError) throw err.tooMany(30, 'assistant_busy', 'The guide is busy. Try again in a moment.');
-      if (e instanceof Anthropic.APIConnectionError || e instanceof Anthropic.InternalServerError) throw err.unavailable('assistant_unavailable', 'The guide is unavailable right now. You can still browse plans.');
-      if (e instanceof Anthropic.APIError) {
-        console.error(JSON.stringify({ level: 'error', msg: 'anthropic_error', status: e.status, error: e.message }));
+      const { Anthropic } = anthropic;
+      if (Anthropic && e instanceof Anthropic.RateLimitError) throw err.tooMany(30, 'assistant_busy', 'The guide is busy. Try again in a moment.');
+      if (Anthropic && (e instanceof Anthropic.APIConnectionError || e instanceof Anthropic.InternalServerError)) {
+        throw err.unavailable('assistant_unavailable', 'The guide is unavailable right now. You can still browse plans.');
+      }
+      if (Anthropic && e instanceof Anthropic.APIError) {
+        logger.error({ msg: 'anthropic_error', status: e.status, err: e.message });
         throw err.unavailable('assistant_unavailable', 'The guide is unavailable right now.');
       }
       throw e;
@@ -214,6 +229,4 @@ const routes = {
   },
 };
 
-exports.BLOCKED_INTENT = BLOCKED_INTENT;
-exports.schemaFor = schemaFor;
-exports.handler = createRouter(routes);
+module.exports = { routes, BLOCKED_INTENT, schemaFor, quotaFor, QUOTA };

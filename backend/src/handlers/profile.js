@@ -1,7 +1,9 @@
 'use strict';
-// Profile, preferences, bootstrap, account deletion, public profiles,
-// notifications inbox, push devices and media upload URLs.
-const { createRouter, err } = require('../lib/http');
+// Profile, preferences, bootstrap, account deletion, data export, public
+// profiles, notifications inbox, push devices and media upload URLs.
+// Mongo port of legacy/src/handlers/profile.js (13 routes).
+const crypto = require('crypto');
+const { err } = require('../lib/http');
 const { check } = require('../lib/validate');
 const db = require('../lib/db');
 const { requireUser } = require('../lib/auth');
@@ -9,12 +11,13 @@ const { audit } = require('../lib/audit');
 const ent = require('../lib/entitlements');
 const media = require('../lib/media');
 const { enforce } = require('../lib/rateLimit');
-const { cognito } = require('../lib/aws');
 const { pageParams, pageOf } = require('../lib/page');
 const P = require('../lib/present');
 const S = require('../services/progress');
-const A = require('../services/activities');
-const { s3 } = require('../lib/aws');
+
+const DEFAULT_CITY = () => process.env.DEFAULT_CITY || 'Ahmedabad';
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const exactCI = (s) => new RegExp(`^${escapeRe(s)}$`, 'i');
 
 const PROFILE_FIELDS = {
   name: { type: 'string', min: 1, max: 40 },
@@ -36,85 +39,133 @@ const PROFILE_FIELDS = {
   onboardingCompleted: { type: 'boolean' },
 };
 
+// Profile fields that require (or create) a profile. Flag-only patches (age gate,
+// terms) arrive before profile setup during onboarding and must not require a name.
+const PROFILE_KEYS = ['avatarKey', 'bio', 'city', 'area', 'interests', 'intents', 'visibility', 'boundaries', 'languages', 'pronouns', 'avatarSeed', 'availabilityWindows', 'onboardingCompleted'];
+const PROFILE_MAP = { avatarKey: 'avatarKey', bio: 'bio', city: 'homeCity', area: 'homeArea', interests: 'interests', intents: 'intents', visibility: 'visibility', boundaries: 'boundaries', languages: 'languages' };
+
+function availabilityOut(av) {
+  const a = av || {};
+  const expired = a.until && new Date(a.until) < new Date();
+  return { status: !a.status || expired ? 'busy' : a.status, activities: a.activitySlugs || [], until: a.until || null, area: a.area || null };
+}
+
 async function loadMe(userId) {
-  const row = await db.one(
-    `SELECT u.id, u.phone_e164, u.status, u.status_reason, u.status_until, u.age_verified, u.terms_accepted_at, u.created_at,
-            p.user_id AS has_profile, p.display_name, p.avatar_key, p.bio, p.home_city, p.home_area, p.interests, p.intents, p.visibility,
-            p.boundaries, p.languages, p.reliability_score, p.preferences,
-            np.product_updates, np.nearby_activities, np.join_requests, np.messages, np.quest_reminders, np.quiet_hours,
-            up.daily_streak_opt_in,
-            av.status AS av_status, av.activity_slugs AS av_activities, av.available_until AS av_until, av.area AS av_area
-       FROM app_users u
-       LEFT JOIN profiles p ON p.user_id = u.id
-       LEFT JOIN notification_preferences np ON np.user_id = u.id
-       LEFT JOIN user_progress up ON up.user_id = u.id
-       LEFT JOIN availability_status av ON av.user_id = u.id
-      WHERE u.id = $1`,
-    [userId]
-  );
-  const prefs = row.preferences || {};
-  const [ents, sub] = await Promise.all([
-    ent.getActive(db, userId),
-    db.one("SELECT store, status, expires_at FROM subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1", [userId]),
+  const { User, Subscription } = require('../models');
+  const u = await User.findById(userId).lean();
+  if (!u) throw err.notFound('user_not_found');
+  const p = u.profile || null;
+  const prefs = (p && p.preferences) || {};
+  const np = u.notificationPrefs || {};
+  const qh = np.quietHours || { start: '22:00', end: '08:00' };
+  const prog = u.progress || {};
+  const [ents, sub, avatarUrl] = await Promise.all([
+    ent.getActive(userId),
+    Subscription.findOne({ userId }).sort({ createdAt: -1 }).select('store status expiresAt').lean(),
+    p ? P.avatarUrl(p.avatarKey) : null,
   ]);
-  const availExpired = row.av_until && new Date(row.av_until) < new Date();
-  const qh = row.quiet_hours || { start: '22:00', end: '08:00' };
-  const onboarded = !!(row.has_profile && row.age_verified && prefs.onboardedAt);
+  const onboarded = !!(p && p.displayName && u.ageVerified && prefs.onboardedAt);
   return {
-    id: row.id,
-    phone: row.phone_e164,
-    ageConfirmed: row.age_verified,
+    id: u._id,
+    phone: u.phone,
+    ageConfirmed: !!u.ageVerified,
     onboarded,
-    status: row.status,
-    statusReason: row.status === 'active' ? null : row.status_reason,
-    statusUntil: row.status_until,
-    memberSince: row.created_at,
+    status: u.status,
+    statusReason: u.status === 'active' ? null : u.statusReason || null,
+    statusUntil: u.statusUntil || null,
+    memberSince: u.createdAt,
     session: {
-      ageConfirmed: row.age_verified,
-      termsAcceptedAt: row.terms_accepted_at,
+      ageConfirmed: !!u.ageVerified,
+      termsAcceptedAt: u.termsAcceptedAt || null,
       onboarded,
-      hasProfile: !!row.has_profile,
+      hasProfile: !!(p && p.displayName),
     },
-    profile: row.has_profile
-      ? {
-          id: row.id,
-          name: row.display_name,
-          bio: row.bio || '',
-          avatarKey: row.avatar_key,
-          avatarUrl: await P.avatarUrl(row.avatar_key),
-          city: row.home_city,
-          area: row.home_area,
-          interests: row.interests,
-          intents: row.intents,
-          visibility: row.visibility,
-          boundaries: row.boundaries || '',
-          pronouns: prefs.pronouns || '',
-          avatarSeed: prefs.avatarSeed || null,
-          availabilityWindows: prefs.availabilityWindows || [],
-          languages: row.languages,
-          reliability: P.publicReliability(row.reliability_score),
-        }
-      : null,
+    profile:
+      p && p.displayName
+        ? {
+            id: u._id,
+            name: p.displayName,
+            bio: p.bio || '',
+            avatarKey: p.avatarKey || null,
+            avatarUrl,
+            city: p.homeCity || null,
+            area: p.homeArea || null,
+            interests: p.interests || [],
+            intents: p.intents || [],
+            visibility: p.visibility || 'discoverable',
+            boundaries: p.boundaries || '',
+            pronouns: prefs.pronouns || '',
+            avatarSeed: prefs.avatarSeed || null,
+            availabilityWindows: prefs.availabilityWindows || [],
+            languages: p.languages || [],
+            reliability: P.publicReliability(p.reliabilityScore == null ? 1 : p.reliabilityScore),
+          }
+        : null,
     prefs: {
       radiusKm: prefs.radiusKm || 3,
       showOnRadar: prefs.showOnRadar !== false,
       analyticsConsent: !!prefs.analyticsConsent,
-      dailyStreakOptIn: !!row.daily_streak_opt_in,
+      dailyStreakOptIn: !!prog.dailyStreakOptIn,
       language: prefs.language || 'English',
       notifications: {
-        nearby: row.nearby_activities ?? true,
-        joinRequests: row.join_requests ?? true,
-        messages: row.messages ?? true,
-        questReminders: row.quest_reminders ?? false,
-        productUpdates: row.product_updates ?? false,
+        nearby: np.nearbyActivities ?? true,
+        joinRequests: np.joinRequests ?? true,
+        messages: np.messages ?? true,
+        questReminders: np.questReminders ?? false,
+        productUpdates: np.productUpdates ?? false,
         quietEnabled: qh.start !== qh.end,
         quietStart: qh.start,
         quietEnd: qh.end,
       },
     },
-    availability: { status: !row.av_status || availExpired ? 'busy' : row.av_status, activities: row.av_activities || [], until: row.av_until || null, area: row.av_area || null },
+    availability: availabilityOut(u.availability),
     subscription: P.subscription(ents, sub),
   };
+}
+
+// Unread messages across the caller's open conversations (system messages count; own messages don't).
+async function unreadMessages(userId) {
+  const { ConversationMember, Message } = require('../models');
+  const members = await ConversationMember.find({ userId, leftAt: null }).select('conversationId lastReadAt joinedAt').lean();
+  if (!members.length) return 0;
+  const or = members.map((m) => ({ conversationId: m.conversationId, createdAt: { $gt: m.lastReadAt || m.joinedAt || new Date(0) } }));
+  return Message.countDocuments({ deletedAt: null, senderUserId: { $ne: userId }, $or: or });
+}
+
+async function cityFor(profileCity) {
+  const { CityArea } = require('../models');
+  const find = (name) => CityArea.find({ active: true, city: exactCI(name) }).sort({ name: 1 }).lean();
+  let city = profileCity || DEFAULT_CITY();
+  let areas = await find(city);
+  if (!areas.length && city.toLowerCase() !== DEFAULT_CITY().toLowerCase()) {
+    city = DEFAULT_CITY();
+    areas = await find(city);
+  }
+  const pts = areas.map((a) => ({ name: a.name, lat: a.centroid.coordinates[1], lng: a.centroid.coordinates[0] }));
+  const avg = (k) => (pts.length ? Math.round((pts.reduce((s, a) => s + a[k], 0) / pts.length) * 1e5) / 1e5 : null);
+  return { name: city, center: { lat: avg('lat'), lng: avg('lng') }, areas: pts };
+}
+
+// Activities `viewerId` may see from `hostId` (public, circles the viewer is in, or plans they're part of).
+async function upcomingHostedPlans(hostId, viewerId) {
+  const { Activity, CircleMember, Participant } = require('../models');
+  const [myCircles, myParts] = await Promise.all([
+    CircleMember.find({ userId: viewerId }).select('circleId').lean(),
+    Participant.find({ userId: viewerId }).select('activityId').lean(),
+  ]);
+  const docs = await Activity.find({
+    hostUserId: hostId,
+    status: { $in: ['open', 'full'] },
+    endsAt: { $gt: new Date() },
+    $or: [{ visibility: 'public' }, { hostUserId: viewerId }, { visibility: 'circle', circleId: { $in: myCircles.map((c) => c.circleId) } }, { _id: { $in: myParts.map((x) => x.activityId) } }],
+  })
+    .sort({ startsAt: 1 })
+    .limit(5)
+    .lean();
+  if (!docs.length) return [];
+  // Activity presentation (hydrated host/participants/viewer state) lives with the activities port.
+  const A = require('../services/activities');
+  return A.presentMany(docs, viewerId);
 }
 
 const routes = {
@@ -125,140 +176,139 @@ const routes = {
 
   'GET /v1/me/bootstrap': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
+    const { Category, Level, Notification } = require('../models');
     const [me, categories, levels, progress, unreadN, unreadM] = await Promise.all([
       loadMe(user.id),
-      db.many("SELECT slug, label, short, pictogram, risk_level FROM activity_categories WHERE is_active AND risk_level <> 'restricted' ORDER BY sort_order, label"),
-      db.many('SELECT level, name, xp_threshold, subtitle, pictogram FROM levels ORDER BY level'),
-      S.progressFor(db, user.id),
-      db.one('SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND read_at IS NULL', [user.id]),
-      db.one(
-        `SELECT COALESCE(sum((SELECT count(*) FROM messages x WHERE x.conversation_id = cm.conversation_id AND x.deleted_at IS NULL
-                   AND x.created_at > COALESCE(cm.last_read_at, cm.joined_at) AND (x.sender_user_id IS NULL OR x.sender_user_id <> $1))), 0)::int AS n
-           FROM conversation_members cm WHERE cm.user_id = $1 AND cm.left_at IS NULL`,
-        [user.id]
-      ),
+      Category.find({ isActive: true, riskLevel: { $ne: 'restricted' } }).sort({ sortOrder: 1, label: 1 }).lean(),
+      Level.find({}).sort({ level: 1 }).lean(),
+      S.progressFor(user.id),
+      Notification.countDocuments({ userId: user.id, readAt: null }),
+      unreadMessages(user.id),
     ]);
-    const { _stats, ...prog } = progress;
-    const cityName = (me.profile && me.profile.city) || process.env.DEFAULT_CITY || 'Ahmedabad';
-    let areas = await db.many('SELECT name, ST_Y(centroid::geometry) AS lat, ST_X(centroid::geometry) AS lng FROM city_areas WHERE active AND lower(city) = lower($1) ORDER BY name', [cityName]);
-    let city = cityName;
-    if (!areas.length && cityName !== (process.env.DEFAULT_CITY || 'Ahmedabad')) {
-      city = process.env.DEFAULT_CITY || 'Ahmedabad';
-      areas = await db.many('SELECT name, ST_Y(centroid::geometry) AS lat, ST_X(centroid::geometry) AS lng FROM city_areas WHERE active AND lower(city) = lower($1) ORDER BY name', [city]);
-    }
-    const avg = (k) => (areas.length ? Math.round((areas.reduce((s, a) => s + a[k], 0) / areas.length) * 1e5) / 1e5 : null);
+    const city = await cityFor(me.profile && me.profile.city);
     return {
       me,
-      city: { name: city, center: { lat: avg('lat'), lng: avg('lng') }, areas: areas.map((a) => ({ name: a.name, lat: a.lat, lng: a.lng })) },
+      city,
       service: { status: process.env.MAINTENANCE_MODE === 'true' ? 'maintenance' : 'ok' },
       subscription: me.subscription,
       categories: categories.map(P.category),
-      levels: levels.map((l) => ({ level: l.level, name: l.name, xp: l.xp_threshold, subtitle: l.subtitle, pictogram: l.pictogram })),
-      progress: prog,
-      unread: { notifications: unreadN.n, messages: unreadM.n },
+      levels: levels.map((l) => ({ level: l.level, name: l.name, xp: l.xpThreshold, subtitle: l.subtitle || null, pictogram: l.pictogram || null })),
+      progress: S.stripStats(progress),
+      unread: { notifications: unreadN, messages: unreadM },
       serverTime: new Date().toISOString(),
     };
   },
 
   'PATCH /v1/me': async (req) => {
     const user = await requireUser(req);
+    const { User, Category } = require('../models');
     const v = check(PROFILE_FIELDS, req.body);
     const name = v.name || v.displayName;
     if (v.avatarKey && !media.isOwnedKey(v.avatarKey, 'avatar', user.id)) throw err.badRequest('invalid_avatar_key');
-    if (v.interests) {
-      const known = await db.many('SELECT slug FROM activity_categories WHERE is_active AND slug = ANY($1)', [v.interests]);
-      if (known.length !== v.interests.length) throw err.badRequest('unknown_interest');
+    if (v.interests && v.interests.length) {
+      const known = await Category.countDocuments({ isActive: true, slug: { $in: v.interests } });
+      if (known !== v.interests.length) throw err.badRequest('unknown_interest');
     }
-    await db.withTransaction(async (client) => {
+    await db.withTransaction(async (session) => {
+      const u = await User.findById(user.id).select('ageVerifiedAt ageVerificationMethod termsAcceptedAt profile').session(session).lean();
+      if (!u) throw err.notFound('user_not_found');
+      const now = new Date();
+      const set = {};
       if (v.ageConfirmed === true) {
         // Self-declared 18+ with terms acknowledgement (age_gate). No date of birth is stored.
-        await client.query(
-          "UPDATE app_users SET age_verified = TRUE, age_verified_at = COALESCE(age_verified_at, now()), age_verification_method = COALESCE(age_verification_method, 'self_declared_18plus') WHERE id = $1",
-          [user.id]
-        );
-        await audit(client, { actorUserId: user.id, action: 'user.age_confirmed', targetType: 'user', targetId: user.id, ip: req.ip });
+        set.ageVerified = true;
+        if (!u.ageVerifiedAt) set.ageVerifiedAt = now;
+        if (!u.ageVerificationMethod) set.ageVerificationMethod = 'self_declared_18plus';
+        await audit({ actorUserId: user.id, action: 'user.age_confirmed', targetType: 'user', targetId: user.id, ip: req.ip }, { session });
       }
-      if (v.termsAccepted === true) await client.query('UPDATE app_users SET terms_accepted_at = COALESCE(terms_accepted_at, now()) WHERE id = $1', [user.id]);
+      if (v.termsAccepted === true && !u.termsAcceptedAt) set.termsAcceptedAt = now;
 
-      const { rowCount } = await client.query('SELECT 1 FROM profiles WHERE user_id = $1', [user.id]);
-      // Flag-only updates (age gate, terms) arrive before profile setup during
-      // onboarding, so only require a name when profile fields are being written.
-      const PROFILE_KEYS = ['avatarKey', 'bio', 'city', 'area', 'interests', 'intents', 'visibility', 'boundaries', 'languages', 'pronouns', 'avatarSeed', 'availabilityWindows', 'onboardingCompleted'];
+      const hasProfile = !!(u.profile && u.profile.displayName);
       const writesProfile = !!name || PROFILE_KEYS.some((k) => v[k] !== undefined);
-      if (!rowCount && writesProfile) {
+      let profileExists = hasProfile;
+      if (!hasProfile && writesProfile) {
         if (!name) throw err.badRequest('name_required', 'Add your name to create a profile');
-        await client.query(
-          `INSERT INTO profiles (user_id, display_name, avatar_key, bio, home_city, home_area, interests, intents, visibility, boundaries, languages)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'discoverable'), $10, $11)`,
-          [user.id, name, v.avatarKey || null, v.bio || null, v.city || null, v.area || null, v.interests || [], v.intents || [], v.visibility || null, v.boundaries || null, v.languages || []]
-        );
-        await client.query('INSERT INTO notification_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
-        await client.query('INSERT INTO user_progress (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
-      } else if (rowCount) {
-        const map = { avatarKey: 'avatar_key', bio: 'bio', city: 'home_city', area: 'home_area', interests: 'interests', intents: 'intents', visibility: 'visibility', boundaries: 'boundaries', languages: 'languages' };
-        const sets = [];
-        const vals = [user.id];
-        if (name) {
-          vals.push(name);
-          sets.push(`display_name = $${vals.length}`);
-        }
-        for (const [k, col] of Object.entries(map)) {
-          if (v[k] !== undefined) {
-            vals.push(v[k]);
-            sets.push(`${col} = $${vals.length}`);
-          }
-        }
-        if (sets.length) await client.query(`UPDATE profiles SET ${sets.join(', ')}, updated_at = now() WHERE user_id = $1`, vals);
+        set.profile = {
+          displayName: name,
+          avatarKey: v.avatarKey || null,
+          bio: v.bio || null,
+          homeCity: v.city || null,
+          homeArea: v.area || null,
+          interests: v.interests || [],
+          intents: v.intents || [],
+          visibility: v.visibility || 'discoverable',
+          boundaries: v.boundaries || null,
+          languages: v.languages || [],
+          reliabilityScore: 1,
+          preferences: {},
+          createdAt: now,
+          updatedAt: now,
+        };
+        profileExists = true;
+      } else if (hasProfile) {
+        if (name) set['profile.displayName'] = name;
+        for (const [k, path] of Object.entries(PROFILE_MAP)) if (v[k] !== undefined) set[`profile.${path}`] = v[k];
       }
-      const prefPatch = {};
-      if (v.pronouns !== undefined) prefPatch.pronouns = v.pronouns;
-      if (v.avatarSeed !== undefined) prefPatch.avatarSeed = v.avatarSeed;
-      if (v.availabilityWindows !== undefined) prefPatch.availabilityWindows = v.availabilityWindows;
-      if (v.onboardingCompleted === true) prefPatch.onboardedAt = new Date().toISOString();
-      if (Object.keys(prefPatch).length) await client.query('UPDATE profiles SET preferences = preferences || $2::jsonb WHERE user_id = $1', [user.id, JSON.stringify(prefPatch)]);
+      if (profileExists) {
+        const prefPatch = {};
+        if (v.pronouns !== undefined) prefPatch.pronouns = v.pronouns;
+        if (v.avatarSeed !== undefined) prefPatch.avatarSeed = v.avatarSeed;
+        if (v.availabilityWindows !== undefined) prefPatch.availabilityWindows = v.availabilityWindows;
+        if (v.onboardingCompleted === true) prefPatch.onboardedAt = now.toISOString();
+        if (set.profile) Object.assign(set.profile.preferences, prefPatch);
+        else for (const [k, val] of Object.entries(prefPatch)) set[`profile.preferences.${k}`] = val;
+        if (!set.profile && Object.keys(set).some((k) => k.startsWith('profile.'))) set['profile.updatedAt'] = now;
+      }
+      if (Object.keys(set).length) await User.updateOne({ _id: user.id }, { $set: set }, { session });
     });
     return loadMe(user.id);
   },
 
   'GET /v1/users/{userId}/public-profile': async (req) => {
     const user = await requireUser(req);
-    const row = await db.one(
-      `SELECT u.id, u.created_at, p.display_name, p.avatar_key, p.bio, p.interests, p.home_area AS area, p.reliability_score, p.visibility,
-              COALESCE(up.level, 1) AS level, av.status AS availability_status, av.activity_slugs,
-              (SELECT count(*)::int FROM activity_participants ap WHERE ap.user_id = u.id AND ap.state = 'completed') AS completed
-         FROM app_users u JOIN profiles p ON p.user_id = u.id LEFT JOIN user_progress up ON up.user_id = u.id
-         LEFT JOIN availability_status av ON av.user_id = u.id AND (av.available_until IS NULL OR av.available_until > now())
-        WHERE u.id = $1 AND u.status IN ('active','limited')
-          AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = $2 AND b.blocked_user_id = u.id) OR (b.blocker_user_id = u.id AND b.blocked_user_id = $2))`,
-      [req.params.userId, user.id]
-    );
-    if (!row || (row.visibility === 'hidden' && row.id !== user.id)) throw err.notFound('user_not_found');
-    const badges = await db.many(
-      'SELECT a.slug AS id, a.title, a.pictogram, a.color, ua.earned_at AS "earnedAt" FROM user_achievements ua JOIN achievements a ON a.id = ua.achievement_id WHERE ua.user_id = $1 ORDER BY ua.earned_at DESC LIMIT 12',
-      [row.id]
-    );
-    const [shared, upcoming] = await Promise.all([
-      db.many('SELECT a.circle_id FROM circle_members a JOIN circle_members b ON b.circle_id = a.circle_id AND b.user_id = $2 JOIN circles c ON c.id = a.circle_id AND c.status = $3 WHERE a.user_id = $1', [row.id, user.id, 'active']),
-      db.many(
-        `${A.SELECT} WHERE a.host_user_id = $2 AND a.status IN ('open','full') AND a.ends_at > now() AND ${A.VISIBLE_TO_VIEWER} AND ${A.NOT_BLOCKED} ORDER BY a.starts_at LIMIT 5`,
-        [user.id, row.id]
-      ),
+    const { User, Block, Participant, UserAchievement, Achievement, CircleMember, Circle } = require('../models');
+    const targetId = String(req.params.userId);
+    const [target, blocked] = await Promise.all([
+      User.findOne({ _id: targetId, status: { $in: ['active', 'limited'] }, 'profile.displayName': { $type: 'string' } }).lean(),
+      Block.exists({ $or: [{ blockerUserId: user.id, blockedUserId: targetId }, { blockerUserId: targetId, blockedUserId: user.id }] }),
     ]);
+    if (!target || blocked || (target.profile.visibility === 'hidden' && target._id !== user.id)) throw err.notFound('user_not_found');
+
+    const [completed, earned, theirCircles, myCircles, upcomingPlans] = await Promise.all([
+      Participant.countDocuments({ userId: targetId, state: 'completed' }),
+      UserAchievement.find({ userId: targetId }).sort({ earnedAt: -1 }).limit(12).lean(),
+      CircleMember.find({ userId: targetId }).select('circleId').lean(),
+      CircleMember.find({ userId: user.id }).select('circleId').lean(),
+      upcomingHostedPlans(targetId, user.id),
+    ]);
+    const defs = earned.length ? await Achievement.find({ _id: { $in: earned.map((e) => e.achievementId) } }).lean() : [];
+    const defById = new Map(defs.map((a) => [a._id, a]));
+    const badges = earned
+      .filter((e) => defById.has(e.achievementId))
+      .map((e) => {
+        const a = defById.get(e.achievementId);
+        return { id: a.slug, title: a.title, pictogram: a.pictogram, color: a.color, earnedAt: e.earnedAt };
+      });
+    const mine = new Set(myCircles.map((c) => c.circleId));
+    const sharedIds = theirCircles.map((c) => c.circleId).filter((id) => mine.has(id));
+    const activeShared = sharedIds.length ? await Circle.find({ _id: { $in: sharedIds }, status: 'active' }).select('_id').lean() : [];
+
     // PublicUser + bio/badges. No phone, exact location or raw ratings — ever.
     return {
-      ...(await P.publicUser(row)),
-      avatarSeed: row.id,
-      bio: row.bio || '',
-      memberSince: row.created_at,
+      ...(await P.publicUser(target, { completed })),
+      avatarSeed: (target.profile.preferences && target.profile.preferences.avatarSeed) || target._id,
+      bio: target.profile.bio || '',
+      memberSince: target.createdAt,
       verification: { phone: true },
       badges,
-      sharedCircleIds: shared.map((s) => s.circle_id),
-      upcomingPlans: upcoming.map((r) => A.present(r, { viewerId: user.id })),
+      sharedCircleIds: activeShared.map((c) => c._id),
+      upcomingPlans,
     };
   },
 
   'PATCH /v1/me/preferences': async (req) => {
     const user = await requireUser(req);
+    const { User } = require('../models');
     const v = check(
       {
         notifications: {
@@ -283,139 +333,171 @@ const routes = {
       },
       req.body
     );
-    await db.withTransaction(async (client) => {
-      const n = v.notifications;
-      if (n) {
-        await client.query('INSERT INTO notification_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
-        const quietStart = n.quietEnabled === false ? '00:00' : n.quietStart ?? null;
-        const quietEnd = n.quietEnabled === false ? '00:00' : n.quietEnd ?? null;
-        await client.query(
-          `UPDATE notification_preferences SET
-             product_updates = COALESCE($2, product_updates), nearby_activities = COALESCE($3, nearby_activities),
-             join_requests = COALESCE($4, join_requests), messages = COALESCE($5, messages), quest_reminders = COALESCE($6, quest_reminders),
-             quiet_hours = jsonb_build_object('start', COALESCE($7, quiet_hours->>'start'), 'end', COALESCE($8, quiet_hours->>'end'))
-           WHERE user_id = $1`,
-          [user.id, n.productUpdates ?? null, n.nearby ?? null, n.joinRequests ?? null, n.messages ?? null, n.questReminders ?? null, quietStart, quietEnd]
-        );
+    const u = await User.findById(user.id).select('profile.displayName notificationPrefs').lean();
+    const set = {};
+    const n = v.notifications;
+    if (n) {
+      const map = { productUpdates: 'productUpdates', nearby: 'nearbyActivities', joinRequests: 'joinRequests', messages: 'messages', questReminders: 'questReminders' };
+      for (const [k, path] of Object.entries(map)) if (n[k] !== undefined) set[`notificationPrefs.${path}`] = n[k];
+      const qh = (u && u.notificationPrefs && u.notificationPrefs.quietHours) || { start: '22:00', end: '08:00' };
+      // quietEnabled=false is stored as an empty window (start == end), as in legacy.
+      const start = n.quietEnabled === false ? '00:00' : n.quietStart ?? qh.start;
+      const end = n.quietEnabled === false ? '00:00' : n.quietEnd ?? qh.end;
+      if (n.quietEnabled !== undefined || n.quietStart !== undefined || n.quietEnd !== undefined) set['notificationPrefs.quietHours'] = { start, end };
+    }
+    const hasProfile = !!(u && u.profile && u.profile.displayName);
+    let prefsTouched = false;
+    for (const k of ['radiusKm', 'showOnRadar', 'analyticsConsent', 'language']) {
+      if (v[k] !== undefined && hasProfile) {
+        set[`profile.preferences.${k}`] = v[k];
+        prefsTouched = true;
       }
-      const prefs = {};
-      for (const k of ['radiusKm', 'showOnRadar', 'analyticsConsent', 'language']) if (v[k] !== undefined) prefs[k] = v[k];
-      if (Object.keys(prefs).length) await client.query('UPDATE profiles SET preferences = preferences || $2::jsonb, updated_at = now() WHERE user_id = $1', [user.id, JSON.stringify(prefs)]);
-      if (v.dailyStreakOptIn !== undefined || v.weeklyGoal !== undefined) {
-        await client.query('INSERT INTO user_progress (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
-        await client.query('UPDATE user_progress SET daily_streak_opt_in = COALESCE($2, daily_streak_opt_in), weekly_goal = COALESCE($3, weekly_goal), updated_at = now() WHERE user_id = $1', [
-          user.id,
-          v.dailyStreakOptIn ?? null,
-          v.weeklyGoal ?? null,
-        ]);
-      }
-      if (v.showOnRadar === false) await client.query("UPDATE availability_status SET status = 'busy' WHERE user_id = $1", [user.id]);
-    });
+    }
+    if (prefsTouched) set['profile.updatedAt'] = new Date();
+    if (v.dailyStreakOptIn !== undefined) set['progress.dailyStreakOptIn'] = v.dailyStreakOptIn;
+    if (v.weeklyGoal !== undefined) set['progress.weeklyGoal'] = v.weeklyGoal;
+    if (v.dailyStreakOptIn !== undefined || v.weeklyGoal !== undefined) set['progress.updatedAt'] = new Date();
+    if (v.showOnRadar === false) set['availability.status'] = 'busy';
+    if (Object.keys(set).length) await User.updateOne({ _id: user.id }, { $set: set });
     return loadMe(user.id);
   },
 
-  // DPDP-style deletion: immediate deactivation, sessions revoked, purge after 30 days (jobs.retention).
+  // PUT /v1/me/availability lives in handlers/discovery.js (next to GET /availability/nearby).
+
+  // DPDP-style deletion: immediate deactivation, sessions revoked, purge after 30 days (jobs retention).
   'DELETE /v1/me': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
-    const purgeAfter = new Date(Date.now() + 30 * 86400000).toISOString();
-    await db.withTransaction(async (client) => {
-      await client.query("UPDATE app_users SET status = 'deleted', deleted_at = now(), purge_after = $2 WHERE id = $1", [user.id, purgeAfter]);
-      await client.query("UPDATE profiles SET visibility = 'hidden' WHERE user_id = $1", [user.id]);
-      await client.query("UPDATE availability_status SET status = 'busy' WHERE user_id = $1", [user.id]);
-      await client.query("UPDATE activities SET status = 'cancelled', cancelled_at = now(), cancel_reason = 'host_deleted_account' WHERE host_user_id = $1 AND status IN ('open','full','draft')", [user.id]);
-      await client.query("UPDATE activity_participants SET state = 'cancelled' WHERE user_id = $1 AND state IN ('requested','accepted','waitlisted')", [user.id]);
-      await client.query('DELETE FROM device_tokens WHERE user_id = $1', [user.id]);
-      await audit(client, { actorUserId: user.id, action: 'user.delete_requested', targetType: 'user', targetId: user.id, ip: req.ip });
+    const { User, Activity, Participant, DeviceToken } = require('../models');
+    const purgeAfter = new Date(Date.now() + 30 * 86400000);
+    await db.withTransaction(async (session) => {
+      const now = new Date();
+      await User.updateOne({ _id: user.id }, { $set: { status: 'deleted', deletedAt: now, purgeAfter, 'availability.status': 'busy' } }, { session });
+      await User.updateOne({ _id: user.id, 'profile.displayName': { $type: 'string' } }, { $set: { 'profile.visibility': 'hidden' } }, { session });
+      await Activity.updateMany(
+        { hostUserId: user.id, status: { $in: ['open', 'full', 'draft'] } },
+        { $set: { status: 'cancelled', cancelledAt: now, cancelReason: 'host_deleted_account' } },
+        { session }
+      );
+      // Leave other people's plans, keeping their denormalised counters in step.
+      const parts = await Participant.find({ userId: user.id, state: { $in: ['requested', 'accepted', 'waitlisted'] } }).session(session).lean();
+      for (const p of parts) {
+        if (p.state === 'accepted') {
+          await Activity.updateOne({ _id: p.activityId, acceptedCount: { $gt: 0 } }, { $inc: { acceptedCount: -1 } }, { session });
+          await Activity.updateOne({ _id: p.activityId, status: 'full', $expr: { $lt: ['$acceptedCount', '$capacity'] } }, { $set: { status: 'open' } }, { session });
+        } else if (p.state === 'waitlisted') {
+          await Activity.updateOne({ _id: p.activityId, waitlistCount: { $gt: 0 } }, { $inc: { waitlistCount: -1 } }, { session });
+        }
+      }
+      if (parts.length) await Participant.updateMany({ _id: { $in: parts.map((p) => p._id) } }, { $set: { state: 'cancelled', decidedAt: now } }, { session });
+      await DeviceToken.deleteMany({ userId: user.id }, { session });
+      await audit({ actorUserId: user.id, action: 'user.delete_requested', targetType: 'user', targetId: user.id, ip: req.ip }, { session });
     });
-    if (process.env.USER_POOL_ID) {
-      const { AdminUserGlobalSignOutCommand, AdminDisableUserCommand } = require('@aws-sdk/client-cognito-identity-provider');
-      await cognito().send(new AdminUserGlobalSignOutCommand({ UserPoolId: process.env.USER_POOL_ID, Username: user.sub })).catch(() => {});
-      await cognito().send(new AdminDisableUserCommand({ UserPoolId: process.env.USER_POOL_ID, Username: user.sub })).catch(() => {});
-    }
-    return { status: 'deletion_pending', purgeAfter };
+    // Replaces the Cognito global sign-out: every refresh token for this user is revoked.
+    await require('../lib/tokens').revokeAllForUser(user.id, 'account_deleted').catch(() => {});
+    return { status: 'deletion_pending', purgeAfter: purgeAfter.toISOString() };
   },
 
   // DPDP right to access: a JSON copy of the caller's own data via a 24-hour private link.
   'POST /v1/me/data-export': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
-    await enforce(db, 'data_export', user.id);
-    const Bucket = process.env.MEDIA_BUCKET;
-    if (!Bucket) throw err.unavailable('media_not_configured');
-    const q = (sql) => db.many(sql, [user.id]);
-    const [me, participations, messages, circles, reports, blocks, contacts, expenses, notifications, xp, subs, audits] = await Promise.all([
-      loadMe(user.id),
-      q(`SELECT a.id, a.title, a.starts_at, a.coarse_area, p.state, (a.host_user_id = p.user_id) AS hosted, p.requested_at, p.checked_in_at, p.completion_confirmed_at
-           FROM activity_participants p JOIN activities a ON a.id = p.activity_id WHERE p.user_id = $1 ORDER BY a.starts_at DESC`),
-      q('SELECT id, conversation_id, body, media_key, created_at, deleted_at FROM messages WHERE sender_user_id = $1 ORDER BY created_at DESC'),
-      q('SELECT c.id, c.name, m.role, m.joined_at FROM circle_members m JOIN circles c ON c.id = m.circle_id WHERE m.user_id = $1'),
-      q('SELECT id, reason_code, details, status, created_at FROM reports WHERE reporter_user_id = $1 ORDER BY created_at DESC'),
-      q('SELECT blocked_user_id, created_at FROM user_blocks WHERE blocker_user_id = $1'),
-      q('SELECT name, phone_e164, status, created_at FROM trusted_contacts WHERE user_id = $1'),
-      q(`SELECT e.id, e.description, e.total_minor, e.split_method, e.created_at, s.amount_minor, s.state
-           FROM expense_shares s JOIN expenses e ON e.id = s.expense_id WHERE s.user_id = $1 ORDER BY e.created_at DESC`),
-      q('SELECT type, title, body, created_at, read_at FROM notifications WHERE user_id = $1 ORDER BY created_at DESC'),
-      q('SELECT event_type, xp_delta, activity_id, created_at FROM xp_events WHERE user_id = $1 ORDER BY created_at DESC'),
-      q('SELECT store, product_id, status, started_at, expires_at FROM subscriptions WHERE user_id = $1'),
-      q('SELECT action, target_type, target_id, created_at FROM audit_events WHERE actor_user_id = $1 ORDER BY created_at DESC LIMIT 1000'),
+    await enforce('data_export', user.id);
+    if (!media.isConfigured()) throw err.unavailable('media_not_configured');
+    const M = require('../models');
+    const uid = user.id;
+    const [me, parts, messages, memberships, reports, blocks, contacts, expenses, notifications, xp, subs, audits] = await Promise.all([
+      loadMe(uid),
+      M.Participant.find({ userId: uid }).lean(),
+      M.Message.find({ senderUserId: uid }).sort({ createdAt: -1 }).select('conversationId body mediaKey createdAt deletedAt').lean(),
+      M.CircleMember.find({ userId: uid }).lean(),
+      M.Report.find({ reporterUserId: uid }).sort({ createdAt: -1 }).select('reasonCode details status createdAt').lean(),
+      M.Block.find({ blockerUserId: uid }).select('blockedUserId createdAt').lean(),
+      M.TrustedContact.find({ userId: uid }).select('name phone status createdAt').lean(),
+      M.Expense.find({ 'shares.userId': uid }).sort({ createdAt: -1 }).lean(),
+      M.Notification.find({ userId: uid }).sort({ createdAt: -1 }).select('type title body createdAt readAt').lean(),
+      M.XpEvent.find({ userId: uid }).sort({ createdAt: -1 }).select('eventType xpDelta activityId createdAt').lean(),
+      M.Subscription.find({ userId: uid }).select('store productId status startedAt expiresAt').lean(),
+      M.AuditEvent.find({ actorUserId: uid }).sort({ createdAt: -1 }).limit(1000).select('action targetType targetId createdAt').lean(),
     ]);
+    const [acts, circles] = await Promise.all([
+      parts.length ? M.Activity.find({ _id: { $in: parts.map((p) => p.activityId) } }).select('title startsAt coarseArea hostUserId').lean() : [],
+      memberships.length ? M.Circle.find({ _id: { $in: memberships.map((m) => m.circleId) } }).select('name').lean() : [],
+    ]);
+    const actById = new Map(acts.map((a) => [a._id, a]));
+    const circleById = new Map(circles.map((c) => [c._id, c]));
+    const strip = ({ _id, ...rest }) => ({ id: _id, ...rest });
     const exportDoc = {
       generatedAt: new Date().toISOString(),
       notice: 'Your Project IRL data. Other people’s personal data is excluded. Reports filed about you are not included to protect reporters.',
       account: me,
-      plans: participations,
-      messagesSent: messages,
-      circles,
-      reportsFiled: reports,
-      blocks,
-      trustedContacts: contacts,
-      expenseShares: expenses,
-      notifications,
-      xpEvents: xp,
-      subscriptions: subs,
-      activityLog: audits,
+      plans: parts
+        .filter((p) => actById.has(p.activityId))
+        .map((p) => {
+          const a = actById.get(p.activityId);
+          return { id: a._id, title: a.title, startsAt: a.startsAt, area: a.coarseArea, state: p.state, hosted: a.hostUserId === uid, requestedAt: p.requestedAt, checkedInAt: p.checkedInAt, completionConfirmedAt: p.completionConfirmedAt };
+        })
+        .sort((x, y) => new Date(y.startsAt) - new Date(x.startsAt)),
+      messagesSent: messages.map(strip),
+      circles: memberships.map((m) => ({ id: m.circleId, name: (circleById.get(m.circleId) || {}).name || null, role: m.role, joinedAt: m.joinedAt })),
+      reportsFiled: reports.map(strip),
+      blocks: blocks.map(({ blockedUserId, createdAt }) => ({ blockedUserId, createdAt })),
+      trustedContacts: contacts.map(({ name, phone, status, createdAt }) => ({ name, phone, status, createdAt })),
+      expenseShares: expenses.map((e) => {
+        const s = (e.shares || []).find((x) => x.userId === uid) || {};
+        return { id: e._id, description: e.description, totalMinor: e.totalMinor, splitMethod: e.splitMethod, createdAt: e.createdAt, amountMinor: s.amountMinor, state: s.state };
+      }),
+      notifications: notifications.map(({ _id, ...rest }) => rest),
+      xpEvents: xp.map(({ _id, ...rest }) => rest),
+      subscriptions: subs.map(({ _id, ...rest }) => rest),
+      activityLog: audits.map(({ _id, ...rest }) => rest),
     };
-    const { PutObjectCommand } = require('@aws-sdk/client-s3');
-    const key = `export/${user.id}/${require('crypto').randomUUID()}.json`;
-    await s3().send(new PutObjectCommand({ Bucket, Key: key, Body: JSON.stringify(exportDoc, null, 2), ContentType: 'application/json', ServerSideEncryption: 'AES256' }));
+    const key = `export/${uid}/${crypto.randomUUID()}.json`;
+    await media.putObject(key, JSON.stringify(exportDoc, null, 2), 'application/json');
     const url = await media.signedGet(key, 86400);
-    await audit(db, { actorUserId: user.id, action: 'user.data_export', targetType: 'user', targetId: user.id, ip: req.ip });
+    await audit({ actorUserId: uid, action: 'user.data_export', targetType: 'user', targetId: uid, ip: req.ip });
     return { status: 'ready', url, expiresAt: new Date(Date.now() + 86400000).toISOString(), format: 'json' };
   },
 
   'GET /v1/notifications': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
-    const page = pageParams(req.query, { def: 30, max: 100 });
-    const rows = await db.many('SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3', [user.id, page.sqlLimit, page.offset]);
-    return pageOf(rows, page, P.notification);
+    const { Notification } = require('../models');
+    const p = pageParams(req.query, { def: 30, max: 100 });
+    const rows = await Notification.find({ userId: user.id }).sort({ createdAt: -1, _id: -1 }).skip(p.offset).limit(p.fetchLimit).lean();
+    return pageOf(rows, p, P.notification);
   },
 
   'POST /v1/notifications/read-all': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
-    const r = await db.query('UPDATE notifications SET read_at = now() WHERE user_id = $1 AND read_at IS NULL', [user.id]);
-    return { updated: r.rowCount };
+    const { Notification } = require('../models');
+    const r = await Notification.updateMany({ userId: user.id, readAt: null }, { $set: { readAt: new Date() } });
+    return { updated: r.modifiedCount || 0 };
   },
 
   'POST /v1/notifications/{notificationId}/read': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
-    const r = await db.query('UPDATE notifications SET read_at = COALESCE(read_at, now()) WHERE id = $1 AND user_id = $2', [req.params.notificationId, user.id]);
-    if (!r.rowCount) throw err.notFound('notification_not_found');
+    const { Notification } = require('../models');
+    const n = await Notification.findOne({ _id: String(req.params.notificationId), userId: user.id }).select('readAt').lean();
+    if (!n) throw err.notFound('notification_not_found');
+    if (!n.readAt) await Notification.updateOne({ _id: n._id, readAt: null }, { $set: { readAt: new Date() } });
     return { ok: true };
   },
 
   'POST /v1/devices': async (req) => {
     const user = await requireUser(req);
+    const { DeviceToken } = require('../models');
     const v = check({ platform: { type: 'string', required: true, enum: ['ios', 'android'] }, token: { type: 'string', required: true, min: 20, max: 4096 } }, req.body);
-    await db.query('INSERT INTO device_tokens (user_id, platform, token) VALUES ($1, $2, $3) ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform', [
-      user.id,
-      v.platform,
-      v.token,
-    ]);
+    try {
+      await DeviceToken.updateOne({ token: v.token }, { $set: { userId: user.id, platform: v.platform } }, { upsert: true });
+    } catch (e) {
+      if (!e || e.code !== 11000) throw e;
+      await DeviceToken.updateOne({ token: v.token }, { $set: { userId: user.id, platform: v.platform } });
+    }
     return { ok: true };
   },
 
   'DELETE /v1/devices/{token}': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
-    await db.query('DELETE FROM device_tokens WHERE user_id = $1 AND token = $2', [user.id, req.params.token]);
+    const { DeviceToken } = require('../models');
+    await DeviceToken.deleteOne({ userId: user.id, token: String(req.params.token) });
     return { ok: true };
   },
 
@@ -423,16 +505,15 @@ const routes = {
     const user = await requireUser(req);
     const v = check(
       {
-        kind: { type: 'string', required: true, enum: Object.keys(media.KINDS) },
+        kind: { type: 'string', required: true, enum: Object.keys(media.KINDS).filter((k) => k !== 'export') },
         contentType: { type: 'string', required: true, max: 60 },
         sizeBytes: { type: 'integer', required: true, min: 1 },
       },
       req.body
     );
-    await enforce(db, 'media_upload', user.id);
+    await enforce('media_upload', user.id);
     return media.createUpload({ userId: user.id, ...v });
   },
 };
 
-exports.loadMe = loadMe;
-exports.handler = createRouter(routes);
+module.exports = { routes, loadMe, availabilityOut, unreadMessages, cityFor };

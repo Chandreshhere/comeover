@@ -18,7 +18,8 @@ export default function OtpVerifyScreen() {
   const route = useRoute();
   const phone = useAppStore((s) => s.session.phone);
   const verifyOtp = useAppStore((s) => s.verifyOtp);
-  const requestOtp = useAppStore((s) => s.requestOtp);
+  const resendOtp = useAppStore((s) => s.resendOtp);
+  const [channel, setChannel] = useState(route.params?.channel || null); // 'whatsapp' | 'sms' (Slide)
 
   const inputRef = useRef(null);
   const [code, setCode] = useState('');
@@ -55,21 +56,23 @@ export default function OtpVerifyScreen() {
       haptics.warning();
       if (!reduce) shake.value = withSequence(withTiming(-8, { duration: 50 }), withTiming(8, { duration: 50 }), withTiming(-5, { duration: 50 }), withTiming(0, { duration: 50 }));
       if (e?.code === 'otp_locked') setLocked(true);
-      setError(otpErrorMessage(e, "That code didn't match. Check the SMS and try again."));
+      setError(otpErrorMessage(e, "That code didn't match. Check the message and try again."));
       setCode('');
     } finally {
       setLoading(false);
     }
   };
 
-  const resend = async () => {
+  // via: 'sms' | 'whatsapp' to switch channel; undefined = same channel.
+  const resend = async (via) => {
     if (seconds > 0) return;
     setError(null);
     setResending(true);
     try {
-      const res = await requestOtp(phone);
+      const res = await resendOtp(via);
+      if (res?.channel) setChannel(res.channel);
       setLocked(false);
-      setResent(true);
+      setResent(res?.notice || true);
       setSeconds(res?.retryAfterSec || RESEND_SEC);
       setCode('');
       inputRef.current?.focus();
@@ -81,14 +84,16 @@ export default function OtpVerifyScreen() {
     }
   };
 
-  const masked = phone ? `${phone.slice(0, 3)} ${phone.slice(3, 8)} ${phone.slice(8)}` : 'your phone';
+  const masked = route.params?.maskedPhone || (phone ? `${phone.slice(0, 3)} ${phone.slice(3, 8)} ${phone.slice(8)}` : 'your phone');
+  const via = channel === 'whatsapp' ? ' on WhatsApp' : channel === 'sms' ? ' by SMS' : '';
+  const other = channel === 'whatsapp' ? 'sms' : channel === 'sms' ? 'whatsapp' : null;
 
   return (
     <OnboardingFrame
       stepId="otp_verify"
       keyboard
       title="Enter the code"
-      subtitle={`Sent to ${masked}.`}
+      subtitle={`Sent${via} to ${masked}.`}
       footer={<Button title="Verify" onPress={() => verify(code)} loading={loading} disabled={code.length !== LEN || locked} />}
     >
       <Pressable onPress={() => inputRef.current?.focus()} accessibilityRole="none" accessibilityLabel="One-time code input">
@@ -146,7 +151,7 @@ export default function OtpVerifyScreen() {
       )}
       {resent && !error && (
         <AppText variant="caption" color={colors.success} style={{ marginTop: space.sm }} accessibilityLiveRegion="polite">
-          New code sent.
+          {typeof resent === 'string' ? resent : `New code sent${via}.`}
         </AppText>
       )}
 
@@ -161,9 +166,21 @@ export default function OtpVerifyScreen() {
           full={false}
           disabled={seconds > 0 || resending}
           loading={resending}
-          onPress={resend}
+          onPress={() => resend()}
         />
       </View>
+      {other && seconds <= 0 && (
+        <Button
+          title={other === 'sms' ? 'Send by SMS instead' : 'Send on WhatsApp instead'}
+          icon={other === 'sms' ? 'message-square' : 'message-circle'}
+          variant="secondary"
+          size="sm"
+          full={false}
+          disabled={resending}
+          style={{ marginTop: space.xs }}
+          onPress={() => resend(other)}
+        />
+      )}
       <Button title="Change number" variant="ghost" size="sm" full={false} style={{ marginTop: space.xs }} onPress={() => nav.goBack()} />
     </OnboardingFrame>
   );
