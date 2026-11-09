@@ -6,7 +6,7 @@ export const config = {
 };
 
 export const ENV_VARS = [
-  { name: 'NEXT_PUBLIC_API_URL', value: config.apiUrl, help: 'Project IRL API base URL including /v1, e.g. https://api.your-domain.com/v1 (add this console origin to the API CORS_ORIGINS)' },
+  { name: 'NEXT_PUBLIC_API_URL', value: config.apiUrl, help: 'Come Over API base URL including /v1, e.g. https://api.your-domain.com/v1 (add this console origin to the API CORS_ORIGINS)' },
 ];
 
 export const missingEnv = ENV_VARS.filter((v) => !v.value).map((v) => v.name);

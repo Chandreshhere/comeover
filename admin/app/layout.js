@@ -4,8 +4,8 @@ import './globals.css';
 const poppins = Poppins({ subsets: ['latin'], weight: ['400', '500', '600', '700'], variable: '--font-poppins', display: 'swap' });
 
 export const metadata = {
-  title: 'IRL Admin',
-  description: 'Project IRL moderation, safety and operations console',
+  title: 'Come Over Admin',
+  description: 'Come Over moderation, safety and operations console',
   robots: { index: false, follow: false },
 };
 

@@ -5,7 +5,7 @@ export default function NotFound() {
   return (
     <div className="login-wrap">
       <div className="card" style={{ textAlign: 'center', maxWidth: 420 }}>
-        <Mascot size={140} />
+        <Mascot size={140} style={{ margin: '0 auto' }} />
         <h1 className="h1" style={{ marginTop: 12 }}>
           Nothing here
         </h1>

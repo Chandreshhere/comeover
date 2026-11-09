@@ -119,10 +119,10 @@ export default function Shell({ children }) {
         <aside className="sidebar" aria-label="Admin navigation">
           <div className="brand">
             <span className="brand-mark">
-              <Mascot size={36} />
+              <Mascot size={32} shadow={false} />
             </span>
             <div>
-              <div className="h3">IRL Admin</div>
+              <div className="h3">Come Over Admin</div>
               <div className="caption soft">Operations console</div>
             </div>
           </div>

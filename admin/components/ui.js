@@ -174,7 +174,7 @@ export function ConfigRequired() {
           <h1 className="h1">Configuration required</h1>
         </div>
         <p className="soft">
-          The admin console talks only to the real Project IRL API. Set these variables in <span className="mono">.env.local</span> (see <span className="mono">.env.example</span>), then rebuild. Next.js inlines <span className="mono">NEXT_PUBLIC_*</span> values at build time.
+          The admin console talks only to the real Come Over API. Set these variables in <span className="mono">.env.local</span> (see <span className="mono">.env.example</span>), then rebuild. Next.js inlines <span className="mono">NEXT_PUBLIC_*</span> values at build time.
         </p>
         <div className="table-wrap">
           <table className="table">

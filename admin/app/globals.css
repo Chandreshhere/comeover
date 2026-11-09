@@ -161,12 +161,15 @@ textarea {
   padding: 4px 6px 16px;
 }
 .brand-mark {
+  /* The app icon: Mo on the Come Over blue. */
   width: 44px;
   height: 44px;
-  border-radius: 50%;
-  background: var(--surface);
+  border-radius: 12px;
+  background: #5B7BF5;
   display: grid;
   place-items: center;
+  overflow: hidden;
+  flex: none;
 }
 .nav {
   display: flex;
@@ -1280,7 +1283,7 @@ textarea {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: var(--periwinkle);
+  background: #5B7BF5;
   display: grid;
   place-items: center;
   overflow: hidden;

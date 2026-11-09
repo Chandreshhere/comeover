@@ -111,10 +111,10 @@ export default function LoginPage() {
           <Mascot size={150} pose="cheer" />
         </div>
         <h1 className="h1" style={{ textAlign: 'center', marginTop: 8 }}>
-          IRL Admin
+          Come Over Admin
         </h1>
         <p className="soft" style={{ textAlign: 'center', marginTop: 4 }}>
-          Moderation, safety and operations for Project IRL.
+          Moderation, safety and operations for Come Over.
         </p>
         {notice ? (
           <div className="notice" style={{ marginTop: 16 }} role="status">

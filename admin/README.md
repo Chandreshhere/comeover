@@ -1,8 +1,8 @@
-# IRL Admin — moderation & operations console
+# Come Over Admin: moderation and operations console
 
-Next.js 14 (App Router, JavaScript) web console for Project IRL trust & safety, operations and configuration. It uses the same design tokens as the mobile app (`02_design_tokens.json`): periwinkle hero surfaces, white 24 px cards, black pill buttons, pastel accents and Poppins.
+Next.js 14 (App Router, JavaScript) web console for Come Over trust & safety, operations and configuration. It uses the same design tokens as the mobile app (`02_design_tokens.json`): periwinkle hero surfaces, white 24 px cards, black pill buttons, pastel accents and Poppins.
 
-The console talks **only** to the real Project IRL API (Node + MongoDB). There is no mock data. If `NEXT_PUBLIC_API_URL` is missing, every page shows **Configuration required**.
+The console talks **only** to the real Come Over API (Node + MongoDB). There is no mock data. If `NEXT_PUBLIC_API_URL` is missing, every page shows **Configuration required**.
 
 ## Setup
 

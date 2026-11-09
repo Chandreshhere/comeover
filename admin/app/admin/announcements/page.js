@@ -51,7 +51,7 @@ function PhonePreview({ title, body, link }) {
         <div className="push">
           <div className="push-head">
             <span className="push-icon" aria-hidden="true">
-              <Mascot size={18} />
+              <Mascot size={17} shadow={false} />
             </span>
             <span style={{ letterSpacing: 0.4 }}>COME OVER</span>
             <span style={{ marginLeft: 'auto', fontWeight: 500 }}>now</span>

@@ -1,4 +1,4 @@
-// Phone OTP sign-in against the Project IRL API, which delivers codes via
+// Phone OTP sign-in against the Come Over API, which delivers codes via
 // Slide (WhatsApp or SMS). The API issues a short-lived JWT access token
 // (claims: sub, roles) and a rotating refresh token. Tokens live in
 // sessionStorage (cleared when the tab closes). Roles are assigned on the
