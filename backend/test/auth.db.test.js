@@ -154,19 +154,46 @@ test('resend enforces the cooldown and forwards the channel', async (t) => {
 
 test('refresh rotates; reusing a rotated token revokes the family; logout and logout-all', async (t) => {
   if (skip) return t.skip(skip);
+  const { Session } = require('../src/models');
+  const { sha256 } = require('../src/lib/tokens');
+
+  // Benign retry: the app died before saving r1, so it sends the old token
+  // again while r1 is still unused → fresh token, same family, r1 retired.
   const s = await signIn();
   const r1 = await post('/v1/auth/session/refresh', { refreshToken: s.refreshToken });
   assert.equal(r1.status, 200);
   assert.notEqual(r1.body.refreshToken, s.refreshToken);
-  const reuse = await post('/v1/auth/session/refresh', { refreshToken: s.refreshToken });
+  const retry = await post('/v1/auth/session/refresh', { refreshToken: s.refreshToken });
+  assert.equal(retry.status, 200, JSON.stringify(retry.body));
+  assert.notEqual(retry.body.refreshToken, r1.body.refreshToken);
+  const r1Row = await Session.findOne({ tokenHash: sha256(r1.body.refreshToken) }).lean();
+  assert.equal(r1Row.revokeReason, 'superseded_retry');
+  assert.equal((await post('/v1/auth/session/refresh', { refreshToken: r1.body.refreshToken })).status, 401, 'superseded token is dead');
+  const next = await post('/v1/auth/session/refresh', { refreshToken: retry.body.refreshToken });
+  assert.equal(next.status, 200, 'retried token keeps working');
+
+  // Theft: the replacement was already used, then the old token shows up → whole family revoked.
+  const s2 = await signIn();
+  const a1 = await post('/v1/auth/session/refresh', { refreshToken: s2.refreshToken });
+  const a2 = await post('/v1/auth/session/refresh', { refreshToken: a1.body.refreshToken });
+  assert.equal(a2.status, 200);
+  const reuse = await post('/v1/auth/session/refresh', { refreshToken: s2.refreshToken });
   assert.equal(reuse.status, 401);
   assert.equal(reuse.body.code, 'session_expired');
-  const afterReuse = await post('/v1/auth/session/refresh', { refreshToken: r1.body.refreshToken });
+  const afterReuse = await post('/v1/auth/session/refresh', { refreshToken: a2.body.refreshToken });
   assert.equal(afterReuse.status, 401, 'family revoked');
 
-  const s2 = await signIn();
-  assert.equal((await post('/v1/auth/logout', { refreshToken: s2.refreshToken })).status, 200);
-  assert.equal((await post('/v1/auth/session/refresh', { refreshToken: s2.refreshToken })).status, 401);
+  // Outside the grace window the old token is treated as theft too.
+  const s3 = await signIn();
+  const b1 = await post('/v1/auth/session/refresh', { refreshToken: s3.refreshToken });
+  assert.equal(b1.status, 200);
+  await Session.updateOne({ tokenHash: sha256(s3.refreshToken) }, { $set: { rotatedAt: new Date(Date.now() - 10 * 60 * 1000) } });
+  assert.equal((await post('/v1/auth/session/refresh', { refreshToken: s3.refreshToken })).status, 401);
+  assert.equal((await post('/v1/auth/session/refresh', { refreshToken: b1.body.refreshToken })).status, 401, 'family revoked after the window');
+
+  const lo = await signIn();
+  assert.equal((await post('/v1/auth/logout', { refreshToken: lo.refreshToken })).status, 200);
+  assert.equal((await post('/v1/auth/session/refresh', { refreshToken: lo.refreshToken })).status, 401);
 
   const a = await signIn();
   const b = await signIn();

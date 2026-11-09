@@ -3,7 +3,8 @@
 //  - Access token: JWT HS256 (JWT_SECRET), 15 min, claims { sub, roles, sid }.
 //  - Refresh token: 48 random bytes (base64url), stored as sha256 in `sessions`,
 //    30-day expiry, rotated on every use within a `familyId`. Presenting an
-//    already-rotated token is treated as theft: the whole family is revoked.
+//    already-rotated token is treated as theft (the whole family is revoked),
+//    except for a quick retry whose replacement was never used (REUSE_GRACE_MS).
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const config = require('../config');
@@ -55,6 +56,11 @@ async function issueTokens(user, ctx = {}) {
   return { accessToken, refreshToken, expiresIn: config.jwt.accessTtlSec, tokenType: 'Bearer' };
 }
 
+// How long after a rotation the previous refresh token may be retried (see
+// rotateRefreshToken): covers apps killed mid-refresh without weakening theft
+// detection for genuinely stolen tokens.
+const REUSE_GRACE_MS = 5 * 60 * 1000;
+
 async function revokeFamily(familyId, reason) {
   const { Session } = require('../models');
   await Session.updateMany({ familyId, revokedAt: null }, { $set: { revokedAt: new Date(), revokeReason: reason } });
@@ -74,7 +80,29 @@ async function rotateRefreshToken(refreshToken, { ip = null, userAgent = null } 
   if (!claimed) {
     const existing = await Session.findOne({ tokenHash: hash }).lean();
     if (existing && existing.rotatedAt && !existing.revokedAt) {
-      // Reuse of a rotated token → assume theft, revoke the whole family.
+      // Benign retry: the app was killed (or lost signal) after we rotated but
+      // before it stored the new token, so it presents the old one again. If
+      // that happens shortly after the rotation and the replacement was never
+      // used, hand out a fresh token in the same family instead of logging the
+      // user out.
+      const recent = now - new Date(existing.rotatedAt) <= REUSE_GRACE_MS;
+      const replacement = recent && existing.replacedBy ? await Session.findOne({ _id: existing.replacedBy }).lean() : null;
+      if (replacement && !replacement.rotatedAt && !replacement.revokedAt && existing.expiresAt > now) {
+        const user = await User.findById(existing.userId).select('status roles').lean();
+        if (user && user.status !== 'deleted') {
+          await Session.updateOne({ _id: replacement._id, rotatedAt: null }, { $set: { revokedAt: now, revokeReason: 'superseded_retry' } });
+          const next = await createSession(user._id, { familyId: existing.familyId, ip, userAgent });
+          await Session.updateOne({ _id: existing._id }, { $set: { replacedBy: next.session._id, lastUsedAt: now } });
+          return {
+            accessToken: signAccessToken({ userId: user._id, roles: user.roles || [], sid: existing.familyId }),
+            refreshToken: next.refreshToken,
+            expiresIn: config.jwt.accessTtlSec,
+            tokenType: 'Bearer',
+          };
+        }
+      }
+      // Real reuse of a rotated token (outside the grace window, or the new
+      // token was already used) → assume theft, revoke the whole family.
       await revokeFamily(existing.familyId, 'reuse_detected');
     }
     throw err.unauthorized('session_expired', 'Sign in again.');
