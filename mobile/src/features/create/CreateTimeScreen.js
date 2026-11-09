@@ -1,10 +1,18 @@
 // Create step 2 — when and how long.
 import React, { useEffect, useMemo } from 'react';
 import { Pressable, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Card, Chip, ChipRow, Icon } from '@/components';
+import { CalendarDots } from 'phosphor-react-native/src/icons/CalendarDots';
+import { Lightning } from 'phosphor-react-native/src/icons/Lightning';
+import { MoonStars } from 'phosphor-react-native/src/icons/MoonStars';
+import { Sun } from 'phosphor-react-native/src/icons/Sun';
+import { SunHorizon } from 'phosphor-react-native/src/icons/SunHorizon';
+import { Timer } from 'phosphor-react-native/src/icons/Timer';
+import { AppText, Chip, ChipGrid, ChipRow, usePressScale } from '@/components';
+import { IconBubble } from '@/components/Card';
 import { useAppStore } from '@/store/useAppStore';
-import { colors, layout, radius, space } from '@/theme/tokens';
+import { colors, layout, onInkAlpha, space } from '@/theme/tokens';
 import { durationLabel, relativeDay, timeLabel } from '@/utils/format';
 import haptics from '@/utils/haptics';
 import StepScaffold, { FieldLabel } from './components/StepScaffold';
@@ -21,6 +29,49 @@ import {
 } from './createUtils';
 
 const NEEDS_SLOT = ['tonight', 'tomorrow', 'weekend', 'custom'];
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+// Glyphs that say what each window means (components, not colours — safe at module scope).
+const WHEN_GLYPHS = { now: Lightning, in15: Timer, tonight: MoonStars, tomorrow: SunHorizon, weekend: Sun, custom: CalendarDots };
+
+function WhenTile({ o, selected, onPress }) {
+  const press = usePressScale(0.96);
+  return (
+    <AnimatedPressable
+      onPress={onPress}
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`${o.label}, ${o.hint}`}
+      style={[
+        {
+          flex: 1,
+          minHeight: 64,
+          borderRadius: 20,
+          paddingHorizontal: space.sm,
+          paddingVertical: space.xs,
+          backgroundColor: selected ? colors.ink : colors.surface,
+          borderWidth: 1.2,
+          borderColor: selected ? colors.ink : colors.border,
+          flexDirection: 'row',
+          alignItems: 'center',
+        },
+        press.style,
+      ]}
+    >
+      <IconBubble size={40} shape="squircle" tone="periwinkle" bg={selected ? colors.periwinkle : undefined} glyph={WHEN_GLYPHS[o.value] || CalendarDots} iconSize={22} />
+      <View style={{ marginLeft: space.sm, flex: 1 }}>
+        <AppText variant="bodyStrong" color={selected ? colors.white : colors.ink} numberOfLines={1}>
+          {o.label}
+        </AppText>
+        <AppText variant="caption" color={selected ? onInkAlpha(0.7) : colors.muted} numberOfLines={1}>
+          {o.hint}
+        </AppText>
+      </View>
+    </AnimatedPressable>
+  );
+}
 
 export default function CreateTimeScreen() {
   const nav = useNavigation();
@@ -56,66 +107,44 @@ export default function CreateTimeScreen() {
 
   const startsAt = draft.startsAt;
   const end = startsAt ? new Date(new Date(startsAt).getTime() + draft.durationMin * 60000) : null;
+  // The resulting window is echoed above the Next button instead of in a card.
+  const summary = startsAt ? `${relativeDay(startsAt)} · ${timeLabel(startsAt)} – ${timeLabel(end)}` : null;
 
   return (
     <StepScaffold
       step={2}
-      title="When are you going?"
+      title="When is it?"
       subtitle="Plans starting within a few hours fill fastest."
       onNext={() => nav.navigate('create_activity_place')}
       nextDisabled={!startsAt}
-      error={!startsAt && draft.when ? 'That time has passed — pick another slot.' : null}
+      error={!startsAt && draft.when ? 'That time has passed. Pick another slot.' : null}
+      hint={summary}
     >
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs, marginTop: space.lg }}>
+      <ChipGrid columns={2} style={{ marginTop: space.lg }}>
         {WHEN_OPTIONS.map((o) => {
           const selected = when === o.value && !!draft.when;
           return (
-            <Pressable
+            <WhenTile
               key={o.value}
+              o={o}
+              selected={selected}
               onPress={() => {
                 haptics.select();
                 apply({ when: o.value, dayOffset: o.value === 'custom' ? dayOffset : 0 });
               }}
-              accessibilityRole="radio"
-              accessibilityState={{ selected }}
-              accessibilityLabel={`${o.label}, ${o.hint}`}
-              style={{
-                width: '48.5%',
-                borderRadius: 20,
-                padding: space.sm,
-                backgroundColor: selected ? colors.ink : colors.surface,
-                borderWidth: 1.2,
-                borderColor: selected ? colors.ink : colors.border,
-                flexDirection: 'row',
-                alignItems: 'center',
-              }}
-            >
-              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: selected ? colors.periwinkle : colors.surfaceSubtle, alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name={o.icon} size={16} color={colors.ink} />
-              </View>
-              <View style={{ marginLeft: space.xs, flex: 1 }}>
-                <AppText variant="bodyStrong" color={selected ? colors.white : colors.ink} numberOfLines={1}>
-                  {o.label}
-                </AppText>
-                <AppText variant="caption" color={selected ? 'rgba(255,255,255,0.7)' : colors.muted} numberOfLines={1}>
-                  {o.hint}
-                </AppText>
-              </View>
-            </Pressable>
+            />
           );
         })}
-      </View>
+      </ChipGrid>
 
       {when === 'custom' && (
         <>
           <FieldLabel>Day</FieldLabel>
-          <View style={{ marginHorizontal: -layout.screenPadding }}>
-            <ChipRow>
-              {days.map((d) => (
-                <Chip key={d.offset} label={relativeDay(d.date)} selected={dayOffset === d.offset} onPress={() => apply({ dayOffset: d.offset })} />
-              ))}
-            </ChipRow>
-          </View>
+          <ChipRow style={{ marginHorizontal: -layout.screenPadding }}>
+            {days.map((d) => (
+              <Chip key={d.offset} label={relativeDay(d.date)} selected={dayOffset === d.offset} onPress={() => apply({ dayOffset: d.offset })} />
+            ))}
+          </ChipRow>
         </>
       )}
 
@@ -123,41 +152,25 @@ export default function CreateTimeScreen() {
         <>
           <FieldLabel>Start time</FieldLabel>
           {slots.length ? (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
+            <ChipGrid columns={3}>
               {slots.map((s) => (
-                <Chip key={s} label={slotLabel(s)} selected={slot === s} onPress={() => apply({ timeSlot: s })} />
+                <Chip key={s} label={slotLabel(s)} fill selected={slot === s} onPress={() => apply({ timeSlot: s })} />
               ))}
-            </View>
+            </ChipGrid>
           ) : (
             <AppText variant="caption" color={colors.muted}>
-              No slots left today — try Tomorrow or pick a day.
+              No slots left today. Try Tomorrow or pick a day.
             </AppText>
           )}
         </>
       )}
 
       <FieldLabel>How long?</FieldLabel>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
+      <ChipGrid columns={3}>
         {DURATIONS.map((m) => (
-          <Chip key={m} label={durationLabel(m)} selected={draft.durationMin === m} onPress={() => updateDraft({ durationMin: m })} />
+          <Chip key={m} label={durationLabel(m)} fill selected={draft.durationMin === m} onPress={() => updateDraft({ durationMin: m })} />
         ))}
-      </View>
-
-      {startsAt && (
-        <Card bg={colors.periwinkle} elevated={false} style={{ marginTop: space.xl, flexDirection: 'row', alignItems: 'center', borderRadius: radius.hero }} accessibilityLabel={`Starts ${relativeDay(startsAt)} at ${timeLabel(startsAt)}, ends ${timeLabel(end)}`}>
-          <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name="clock" size={20} />
-          </View>
-          <View style={{ marginLeft: space.sm, flex: 1 }}>
-            <AppText variant="bodyStrong">
-              {relativeDay(startsAt)} · {timeLabel(startsAt)} – {timeLabel(end)}
-            </AppText>
-            <AppText variant="caption" color={colors.inkSoft}>
-              {when === 'now' || when === 'in15' ? 'Start time refreshes when you publish' : `${durationLabel(draft.durationMin)} plan`}
-            </AppText>
-          </View>
-        </Card>
-      )}
+      </ChipGrid>
     </StepScaffold>
   );
 }

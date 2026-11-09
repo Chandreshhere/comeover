@@ -14,7 +14,7 @@ export default function EmptyStatesScreen() {
       key: 'activity',
       tag: 'Discover',
       title: 'Nothing nearby yet',
-      body: "No plans in your radius right now. Start one — others nearby are probably thinking the same.",
+      body: 'No plans in your radius right now. Start one?',
       cta: 'Create a plan',
       onCta: () => nav.navigate('create_activity_type'),
       secondary: 'Widen my radius',
@@ -34,7 +34,7 @@ export default function EmptyStatesScreen() {
       key: 'circles',
       tag: 'Circles',
       title: 'No circles yet',
-      body: 'Circles are recurring groups — runners, chai regulars, board-game nights.',
+      body: 'Circles are groups that meet again and again.',
       cta: 'Explore circles',
       onCta: () => tab('circles_home'),
       secondary: 'Start a circle',
@@ -54,7 +54,7 @@ export default function EmptyStatesScreen() {
       key: 'search',
       tag: 'Search',
       title: 'No matches',
-      body: 'Try a different activity, a wider time window or ask the IRL Guide.',
+      body: 'Try another activity or a wider time window.',
       cta: 'Ask the guide',
       onCta: () => nav.navigate('plan_assistant'),
       pose: 'stride',
@@ -73,12 +73,12 @@ export default function EmptyStatesScreen() {
   return (
     <Screen header={<ScreenHeader title="Empty states" subtitle={`${STATES.length} variants`} />}>
       <AppText variant="caption" color={colors.muted} style={{ marginTop: space.xs }}>
-        Every empty state uses Mo and always offers a next step — never a dead end.
+        Every empty state offers a next step.
       </AppText>
       <View style={{ gap: space.md, marginTop: space.md }}>
         {STATES.map((s) => (
           <Card key={s.key} padding={space.sm}>
-            <Tag label={s.tag} bg={colors.periwinkleWash} style={{ margin: space.xs }} />
+            <Tag label={s.tag} bg={colors.periwinkleWash} fg={colors.ink} style={{ margin: space.xs }} />
             <EmptyState compact title={s.title} body={s.body} cta={s.cta} onCta={s.onCta} secondary={s.secondary} onSecondary={s.onSecondary} pose={s.pose} />
           </Card>
         ))}

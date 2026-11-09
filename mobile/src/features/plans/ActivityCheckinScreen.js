@@ -4,7 +4,9 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Button, Card, Icon, Mascot, Screen, ScreenHeader } from '@/components';
+import { ClockCountdown } from 'phosphor-react-native/src/icons/ClockCountdown';
+import { AppText, Button, ListGroup, ListRow, Mascot, Screen, ScreenHeader } from '@/components';
+import { IconBubble } from '@/components/Card';
 import { useAppStore } from '@/store/useAppStore';
 import { getPrecisePosition } from '@/services/location';
 import { colors, radius, space } from '@/theme/tokens';
@@ -48,7 +50,7 @@ export default function ActivityCheckinScreen() {
     } catch (e) {
       if (FAR_CODES.includes(e?.code)) setPhase('far');
       else if (WINDOW_CODES.includes(e?.code)) setError('Check-in is only open from 30 minutes before the start until the plan ends.');
-      else if (e?.code === 'network' || e?.code === 'timeout') setError('No connection. Try again — or check in manually once you’re online.');
+      else if (e?.code === 'network' || e?.code === 'timeout') setError('No connection. Try again, or check in manually once you’re online.');
       else setError(e?.message || 'Couldn’t check in. Try again.');
       if (phase === 'locating') setPhase('intro');
     }
@@ -78,96 +80,79 @@ export default function ActivityCheckinScreen() {
 
   const tooEarly = !inCheckinWindow(a) && phase !== 'done';
 
-  return (
-    <Screen
-      bg={phase === 'done' ? colors.periwinkle : colors.canvas}
-      header={<ScreenHeader title="Check in" variant={phase === 'done' ? 'glass' : 'surface'} />}
-      footer={
-        phase === 'done' ? (
-          <View style={{ flexDirection: 'row', gap: space.xs }}>
-            <Button title="Group chat" icon="message-circle" variant="light" onPress={() => openGroupChat(nav, a)} style={{ flex: 1 }} />
-            <Button title="We're done" full={false} onPress={() => nav.navigate('activity_complete', { id })} />
+  // One status line under the intro; the most relevant state wins.
+  let note = null;
+  if (error) note = { bg: colors.pinkSoft, title: error };
+  else if (phase === 'far') note = { bg: colors.lavender, title: `You don’t seem to be near ${a.area || 'the plan'} yet.`, body: 'Location can be off indoors. If you’re there, check in without it.' };
+  else if (phase === 'denied') note = { bg: colors.lavender, title: 'Couldn’t read your location', body: 'Permission is off or GPS timed out. Check in without it instead.' };
+  else if (tooEarly) note = { bg: colors.orangeSoft, title: 'Check-in opens 30 minutes before the start.', glyph: ClockCountdown };
+
+  if (phase === 'done') {
+    return (
+      <Screen
+        bg={colors.periwinkle}
+        header={<ScreenHeader title="Check in" variant="glass" />}
+        footer={
+          <View style={{ gap: space.xxs }}>
+            <Button title="Open group chat" icon="message-circle" onPress={() => openGroupChat(nav, a)} />
+            <Button title="We’re done, wrap up" variant="ghost" onPress={() => nav.navigate('activity_complete', { id })} />
           </View>
-        ) : (
-          <View style={{ gap: space.xs }}>
-            <Button title={phase === 'locating' ? 'Checking…' : 'Check in with location'} icon="crosshair" loading={phase === 'locating'} disabled={tooEarly || busy} onPress={tryProximity} />
-            <Button title="I’m here — check in manually" variant="secondary" loading={busy} disabled={tooEarly || phase === 'locating'} onPress={manual} />
-          </View>
-        )
-      }
-    >
-      {phase === 'done' ? (
-        <View style={{ alignItems: 'center', marginTop: space.lg }}>
-          <Mascot size={190} mood="celebrate" celebrateKey={1} />
-          <AppText variant="h1" align="center" style={{ marginTop: space.md }} accessibilityLiveRegion="polite">
+        }
+      >
+        <View style={{ alignItems: 'center', marginTop: space.md }}>
+          <Mascot size={170} mood="celebrate" celebrateKey={1} />
+          <AppText variant="h1" align="center" style={{ marginTop: space.md }} accessibilityRole="header" accessibilityLiveRegion="polite">
             Checked in. Have fun!
           </AppText>
-          <AppText color={colors.inkSoft} align="center" style={{ marginTop: 6, maxWidth: 300 }}>
-            When it wraps up, confirm it happened — XP is awarded once the host or another attendee confirms too.
+          <AppText color={colors.inkSoft} align="center" style={{ marginTop: space.xxs, maxWidth: 300 }}>
+            Confirm it happened when you wrap up.
           </AppText>
-          <Card style={{ marginTop: space.xl, alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center' }} onPress={() => nav.navigate('emergency_share', { activityId: a.id })} accessibilityLabel="Share with a trusted contact">
-            <Icon name="share-2" size={18} />
-            <AppText variant="bodyStrong" style={{ flex: 1, marginLeft: space.sm }}>
-              Share with a trusted contact
-            </AppText>
-            <Icon name="chevron-right" size={18} color={colors.muted} />
-          </Card>
         </View>
-      ) : (
-        <>
-          <PlanSummary activity={a} revealVenue={!!a.venueName} style={{ marginTop: space.xs }} />
-          <AppText variant="h2" style={{ marginTop: space.xl }}>
-            Made it?
-          </AppText>
-          <AppText color={colors.muted} style={{ marginTop: 4 }}>
-            Checking in is optional. It helps the group know who’s arrived and builds your show-up record.
-          </AppText>
+        <ListGroup style={{ marginTop: space.xl }}>
+          <ListRow icon="share-2" title="Share with a trusted contact" onPress={() => nav.navigate('emergency_share', { activityId: a.id })} last />
+        </ListGroup>
+      </Screen>
+    );
+  }
 
-          <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, padding: space.md, marginTop: space.md, gap: space.sm }}>
-            <View style={{ flexDirection: 'row' }}>
-              <Icon name="crosshair" size={16} color={colors.deep} style={{ marginTop: 2 }} />
-              <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.xs }}>
-                Location check reads your position once and sends it with this check-in only. Nothing is tracked in the background or shown to others.
+  return (
+    <Screen
+      bg={colors.canvas}
+      header={<ScreenHeader title="Check in" />}
+      footer={
+        <View style={{ gap: space.xxs }}>
+          <Button title={phase === 'locating' ? 'Checking…' : 'Check in with location'} icon="gps" loading={phase === 'locating'} disabled={tooEarly || busy} onPress={tryProximity} />
+          <Button title="Check in without location" variant="ghost" loading={busy} disabled={tooEarly || phase === 'locating'} onPress={manual} />
+        </View>
+      }
+    >
+      <PlanSummary activity={a} revealVenue={!!a.venueName} style={{ marginTop: space.xs }} />
+
+      <View style={{ alignItems: 'center', marginTop: space.xl }}>
+        <IconBubble size={72} tone="periwinkle" icon="gps" iconSize={36} />
+        <AppText variant="h1" align="center" style={{ marginTop: space.md }} accessibilityRole="header">
+          Made it?
+        </AppText>
+        <AppText color={colors.muted} align="center" style={{ marginTop: space.xxs, maxWidth: 300 }}>
+          Optional. It lets the group know you’ve arrived.
+        </AppText>
+        <AppText variant="caption" color={colors.muted} align="center" style={{ marginTop: space.sm, maxWidth: 300 }}>
+          Location is read once for this check-in and never shown to others.
+        </AppText>
+      </View>
+
+      {!!note && (
+        <View style={{ backgroundColor: note.bg, borderRadius: radius.quest, padding: space.sm, marginTop: space.lg, flexDirection: 'row', alignItems: 'center' }} accessibilityLiveRegion="polite">
+          {!!note.glyph && <note.glyph size={18} color={colors.ink} weight="bold" style={{ marginRight: space.xs }} />}
+          <View style={{ flex: 1 }}>
+            <AppText variant="label">{note.title}</AppText>
+            {!!note.body && (
+              <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 2 }}>
+                {note.body}
               </AppText>
-            </View>
-            <View style={{ flexDirection: 'row' }}>
-              <Icon name="user-check" size={16} color={colors.deep} style={{ marginTop: 2 }} />
-              <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.xs }}>
-                Prefer not to share location? Manual check-in works just as well — the group confirms afterwards.
-              </AppText>
-            </View>
+            )}
           </View>
-
-          {tooEarly && (
-            <View style={{ backgroundColor: colors.orangeSoft, borderRadius: radius.quest, padding: space.sm, marginTop: space.md, flexDirection: 'row', alignItems: 'center' }}>
-              <Icon name="clock" size={16} />
-              <AppText variant="caption" style={{ flex: 1, marginLeft: space.xs }}>
-                Check-in opens 30 minutes before the start time.
-              </AppText>
-            </View>
-          )}
-          {phase === 'far' && (
-            <View style={{ backgroundColor: colors.lavender, borderRadius: radius.quest, padding: space.sm, marginTop: space.md }} accessibilityLiveRegion="polite">
-              <AppText variant="label">You don’t seem to be near {a.area || 'the plan'} yet.</AppText>
-              <AppText variant="caption" color={colors.inkSoft}>
-                Location can be off indoors. If you’re there, use manual check-in.
-              </AppText>
-            </View>
-          )}
-          {phase === 'denied' && (
-            <View style={{ backgroundColor: colors.lavender, borderRadius: radius.quest, padding: space.sm, marginTop: space.md }} accessibilityLiveRegion="polite">
-              <AppText variant="label">Couldn’t read your location</AppText>
-              <AppText variant="caption" color={colors.inkSoft}>
-                Permission is off or GPS timed out. Manual check-in works fine.
-              </AppText>
-            </View>
-          )}
-          {!!error && (
-            <View style={{ backgroundColor: colors.pinkSoft, borderRadius: radius.quest, padding: space.sm, marginTop: space.md }} accessibilityLiveRegion="polite">
-              <AppText variant="caption">{error}</AppText>
-            </View>
-          )}
-        </>
+        </View>
       )}
     </Screen>
   );

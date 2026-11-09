@@ -59,7 +59,8 @@ Health: `GET /healthz` (process) and `GET /readyz` (MongoDB + realtime mode). Lo
 | `npm test` | Unit tests plus MongoDB tests on an in-memory replica set (`mongodb-memory-server` downloads `mongod` on first run) |
 | `npm run smoke` | Boots the real server against in-memory MongoDB with Slide mocked, then checks health, OTP sign-in, refresh rotation and the WebSocket |
 | `npm run check` | Every mounted route is documented in `docs/API.md`; reports routes still to port (`--strict` fails on them) |
-| `npm run seed` | Idempotent taxonomy upserts |
+| `npm run seed` | Idempotent taxonomy upserts (resets seeded fields, e.g. category labels, to the values in `scripts/seed.js`) |
+| `node --env-file=.env scripts/seed.js --only-missing` | Adds taxonomy entries that don't exist yet (e.g. new categories) and never overwrites admin-console edits — use this on a live database |
 | `npm run seed:demo` / `npm run seed:demo:reset` | Load / remove demo data for testing (see "Demo data") |
 | `npm run grant-role -- <phone> <admin\|moderator\|none>` | Admin console roles |
 

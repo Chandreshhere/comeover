@@ -1,13 +1,18 @@
 import React from 'react';
 import { Pressable, TextInput, View } from 'react-native';
-import { colors, fonts, radius } from '@/theme/tokens';
+import Animated from 'react-native-reanimated';
+import { colors, fonts, isDark, radius, space } from '@/theme/tokens';
 import AppText from './AppText';
-import { IconButton } from './Button';
+import { IconButton, usePressScale } from './Button';
 import Icon from './Icon';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 // Pill search field. Pass `onPress` to use it as a launcher (navigates to the
 // search screen) or `value/onChangeText` for a live input.
 export default function SearchBar({ placeholder = 'Search plans, people, places', value, onChangeText, onPress, onFilter, autoFocus, style, onSubmitEditing }) {
+  const press = usePressScale(0.98);
+  const canClear = !onPress && !!value && !!onChangeText;
   const inner = (
     <View
       style={[
@@ -20,7 +25,7 @@ export default function SearchBar({ placeholder = 'Search plans, people, places'
           flexDirection: 'row',
           alignItems: 'center',
           paddingLeft: 18,
-          paddingRight: onFilter ? 4 : 18,
+          paddingRight: onFilter ? 4 : canClear ? 6 : 18,
         },
         style,
       ]}
@@ -36,6 +41,8 @@ export default function SearchBar({ placeholder = 'Search plans, people, places'
           onChangeText={onChangeText}
           placeholder={placeholder}
           placeholderTextColor={colors.muted}
+          selectionColor={colors.deep}
+          keyboardAppearance={isDark() ? 'dark' : 'light'}
           autoFocus={autoFocus}
           returnKeyType="search"
           onSubmitEditing={onSubmitEditing}
@@ -43,13 +50,24 @@ export default function SearchBar({ placeholder = 'Search plans, people, places'
           style={{ flex: 1, marginLeft: 10, fontFamily: fonts.regular, fontSize: 15, color: colors.ink, paddingVertical: 0 }}
         />
       )}
+      {canClear && (
+        <Pressable
+          onPress={() => onChangeText('')}
+          accessibilityRole="button"
+          accessibilityLabel="Clear search"
+          hitSlop={8}
+          style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginRight: onFilter ? space.xxs : 0 }}
+        >
+          <Icon name="x-circle" size={18} color={colors.muted} weight="fill" />
+        </Pressable>
+      )}
       {onFilter && <IconButton icon="sliders" variant="ink" size={42} onPress={onFilter} accessibilityLabel="Open filters" />}
     </View>
   );
   if (!onPress) return inner;
   return (
-    <Pressable onPress={onPress} accessibilityRole="search" accessibilityLabel={placeholder}>
+    <AnimatedPressable onPress={onPress} onPressIn={press.onPressIn} onPressOut={press.onPressOut} accessibilityRole="search" accessibilityLabel={placeholder} style={press.style}>
       {inner}
-    </Pressable>
+    </AnimatedPressable>
   );
 }

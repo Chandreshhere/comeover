@@ -6,7 +6,28 @@ import { ActivityIndicator, Image, RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
 import { launchImageLibrary } from 'react-native-image-picker';
-import { AppText, Button, Card, Chip, Icon, IconButton, ListGroup, ListRow, Mascot, OptionCard, Pictogram, ProgressBar, QueryState, Screen, ScreenHeader, Skeleton, Tag, TextField } from '@/components';
+import {
+  AppText,
+  Button,
+  Card,
+  Chip,
+  ChipGrid,
+  Icon,
+  IconBubble,
+  IconButton,
+  ListGroup,
+  ListRow,
+  Mascot,
+  OptionCard,
+  ProgressBar,
+  QueryState,
+  Screen,
+  ScreenHeader,
+  Segmented,
+  Skeleton,
+  Tag,
+  TextField,
+} from '@/components';
 import { colors, radius, space } from '@/theme/tokens';
 import { fadeIn } from '@/theme/motion';
 import { business } from '@/api/endpoints';
@@ -18,7 +39,8 @@ import { rupees, shortDate, usePlans } from '@/features/premium/plans';
 import { errorMessage, fetchMyVenue, normaliseVenue } from './businessShared';
 import useBusinessStore from './useBusinessStore';
 
-const STEPS = ['Business', 'Location', 'Verify', 'Team', 'Plan'];
+// One group of questions per step.
+const STEPS = ['Business', 'Location', 'Proof', 'Contact', 'Team', 'Plan'];
 const TYPES = [
   { id: 'cafe', label: 'Café or restaurant', pictogram: 'chai' },
   { id: 'sport', label: 'Sports venue or court', pictogram: 'badminton' },
@@ -27,20 +49,37 @@ const TYPES = [
   { id: 'club', label: 'Club or community group', pictogram: 'people' },
 ];
 const ROLES = [
-  { id: 'manager', label: 'Manager', sub: 'Edit profile, offers and campaigns' },
-  { id: 'staff', label: 'Staff', sub: 'Verify offers at the counter' },
-  { id: 'analyst', label: 'Analyst', sub: 'View reports only' },
+  { value: 'manager', label: 'Manager', sub: 'Edits the profile, offers and campaigns' },
+  { value: 'staff', label: 'Staff', sub: 'Verifies offers at the counter' },
+  { value: 'analyst', label: 'Analyst', sub: 'Views reports only' },
 ];
 const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const PHONE_RE = /^[6-9]\d{9}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const STATUS_COPY = {
-  in_review: { label: 'In review', bg: colors.orangeSoft, title: 'Submitted for review' },
-  verified: { label: 'Verified', bg: colors.mint, title: 'is verified' },
-  rejected: { label: 'Not approved', bg: colors.pinkSoft, title: 'needs changes' },
-  suspended: { label: 'Suspended', bg: colors.pinkSoft, title: 'is paused' },
-};
+// A function so the colours follow the live light/dark palette.
+const statusCopy = () => ({
+  in_review: { label: 'In review', bg: colors.orangeSoft, title: 'In review' },
+  verified: { label: 'Verified', bg: colors.mint, title: 'You’re verified' },
+  rejected: { label: 'Not approved', bg: colors.pinkSoft, title: 'Needs changes' },
+  suspended: { label: 'Suspended', bg: colors.pinkSoft, title: 'Venue paused' },
+});
+
+// Step title + one helper line (same pattern on every step).
+function StepTitle({ title, subtitle }) {
+  return (
+    <View style={{ marginBottom: space.lg }}>
+      <AppText variant="h2" accessibilityRole="header">
+        {title}
+      </AppText>
+      {!!subtitle && (
+        <AppText color={colors.muted} style={{ marginTop: space.xxs }}>
+          {subtitle}
+        </AppText>
+      )}
+    </View>
+  );
+}
 
 function VenueStatus({ venue, venuePlan, planPrice, onEdit, onReload, refreshing }) {
   const nav = useNavigation();
@@ -51,9 +90,11 @@ function VenueStatus({ venue, venuePlan, planPrice, onEdit, onReload, refreshing
   const [payNotice, setPayNotice] = useState(null);
 
   const status = venue.status || 'in_review';
-  const copy = STATUS_COPY[status] || STATUS_COPY.in_review;
+  const allCopy = statusCopy();
+  const copy = allCopy[status] || allCopy.in_review;
   const planActive = venue.planStatus === 'active';
   const awaitingActivation = !planActive && (venue.planStatus === 'payment_processing' || !!paymentSubmittedAt);
+  const canPay = status === 'verified' && !planActive && !awaitingActivation;
 
   useEffect(() => {
     if (planActive && paymentSubmittedAt) clearPayment();
@@ -74,49 +115,52 @@ function VenueStatus({ venue, venuePlan, planPrice, onEdit, onReload, refreshing
         markPaymentSubmitted();
         onReload();
       } else if (res.status === 'cancelled') {
-        setPayNotice({ ok: false, text: 'Payment cancelled — nothing was charged.' });
+        setPayNotice('Payment cancelled, nothing was charged.');
       } else {
-        setPayNotice({ ok: false, text: `Payment didn't go through: ${res.error || 'please try again.'}` });
+        setPayNotice(`Payment didn't go through: ${res.error || 'please try again.'}`);
       }
     } catch (e) {
-      setPayNotice({ ok: false, text: errorMessage(e, 'Couldn’t start the payment. Try again.') });
+      setPayNotice(errorMessage(e, 'Couldn’t start the payment. Try again.'));
     } finally {
       setPaying(false);
     }
   };
 
+  const title = planActive ? 'You’re all set' : copy.title;
+  const subtitle =
+    status === 'in_review'
+      ? `Usually 2–3 working days. We'll text ${venue.contact?.phone ? `+91 ${venue.contact.phone}` : 'you'}.`
+      : status === 'verified'
+      ? planActive
+        ? 'Create labelled campaigns and track results.'
+        : 'Activate the Venue plan to unlock campaigns and analytics.'
+      : venue.reviewNote || 'Update your details and resubmit.';
+  const planTag = planActive ? 'Active' : awaitingActivation ? 'Activating' : status === 'verified' ? 'Not active' : 'After verification';
+
+  let footer;
+  if (planActive) footer = <Button title="Open dashboard" icon="bar-chart-2" onPress={() => nav.navigate('business_analytics', { venueId: venue.id })} />;
+  else if (canPay) footer = <Button title={planPrice ? `Pay ${planPrice} & activate` : 'Activate Venue plan'} icon="credit-card" loading={paying} disabled={paying} onPress={pay} />;
+  else if (status === 'rejected') footer = <Button title="Edit and resubmit" onPress={onEdit} />;
+  else footer = <Button title="Explore partner places" onPress={() => nav.navigate('business_discovery')} />;
+
   return (
     <Screen
-      header={<ScreenHeader title="Venue verification" />}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onReload} tintColor={colors.ink} />}
-      footer={
-        planActive ? (
-          <View style={{ flexDirection: 'row', gap: space.xs }}>
-            <Button title="Dashboard" variant="secondary" style={{ flex: 1 }} onPress={() => nav.navigate('business_analytics', { venueId: venue.id })} />
-            <Button title="New campaign" style={{ flex: 1 }} onPress={() => nav.navigate('business_campaign_create', { venueId: venue.id })} />
-          </View>
-        ) : status === 'verified' && !awaitingActivation ? (
-          <Button title={planPrice ? `Pay ${planPrice} & activate` : 'Activate Venue plan'} icon="credit-card" loading={paying} disabled={paying} onPress={pay} />
-        ) : (
-          <Button title="Explore partner places" onPress={() => nav.navigate('business_discovery')} />
-        )
+      header={
+        <ScreenHeader
+          title="Your venue"
+          right={planActive ? <IconButton icon="plus" accessibilityLabel="New campaign" onPress={() => nav.navigate('business_campaign_create', { venueId: venue.id })} /> : null}
+        />
       }
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onReload} tintColor={colors.ink} />}
+      footer={footer}
     >
-      <Animated.View entering={fadeIn()} style={{ alignItems: 'center', marginTop: space.lg }}>
-        <View style={{ backgroundColor: colors.periwinkle, borderRadius: radius.hero, padding: space.lg, width: '100%', alignItems: 'center' }}>
-          <Mascot size={150} pose="wave" />
-        </View>
-        <AppText variant="h1" align="center" style={{ marginTop: space.lg }} accessibilityRole="header">
-          {status === 'in_review' ? copy.title : `${venue.name} ${copy.title}`}
+      <Animated.View entering={fadeIn()} style={{ alignItems: 'center', marginTop: space.md }}>
+        <Mascot size={120} pose={status === 'verified' ? 'cheer' : 'wave'} />
+        <AppText variant="h1" align="center" style={{ marginTop: space.md }} accessibilityRole="header">
+          {title}
         </AppText>
-        <AppText color={colors.muted} align="center" style={{ marginTop: space.xs, maxWidth: 310 }}>
-          {status === 'in_review'
-            ? `We check every venue before it appears in the app. Reviews usually take 2–3 working days; we'll message ${venue.contact?.phone ? `+91 ${venue.contact.phone}` : 'you'} with the outcome.`
-            : status === 'verified'
-            ? planActive
-              ? 'Your Venue plan is active. Create labelled campaigns and track results from your dashboard.'
-              : 'You’re verified. Activate the Venue plan to unlock sponsored slots, offers and analytics.'
-            : venue.reviewNote || 'Please update your details and resubmit.'}
+        <AppText color={colors.muted} align="center" style={{ marginTop: space.xs, maxWidth: 320 }}>
+          {subtitle}
         </AppText>
       </Animated.View>
 
@@ -124,46 +168,42 @@ function VenueStatus({ venue, venuePlan, planPrice, onEdit, onReload, refreshing
         <Card bg={colors.orangeSoft} elevated={false} style={{ marginTop: space.lg, flexDirection: 'row', alignItems: 'center' }} accessibilityLiveRegion="polite">
           <ActivityIndicator color={colors.ink} />
           <View style={{ flex: 1, marginLeft: space.sm }}>
-            <AppText variant="bodyStrong">Payment received — activation pending</AppText>
+            <AppText variant="bodyStrong">Activating your plan</AppText>
             <AppText variant="caption" color={colors.inkSoft}>
-              We activate your plan as soon as the payment gateway confirms it. Pull to refresh to check.
+              Payment received. Pull to refresh to check.
             </AppText>
           </View>
         </Card>
       )}
       {payNotice && (
-        <AppText variant="caption" color={payNotice.ok ? colors.success : colors.danger} style={{ marginTop: space.md }} accessibilityLiveRegion="polite">
-          {payNotice.text}
+        <AppText variant="caption" color={colors.danger} align="center" style={{ marginTop: space.md }} accessibilityLiveRegion="polite">
+          {payNotice}
         </AppText>
       )}
 
-      <ListGroup style={{ marginTop: space.lg }}>
+      <ListGroup style={{ marginTop: space.xl }}>
         <ListRow icon="briefcase" title={venue.name} subtitle={[TYPES.find((t) => t.id === venue.type)?.label || venue.kind, venue.area].filter(Boolean).join(' · ')} />
-        {!!venue.submittedAt && <ListRow icon="calendar" title="Submitted" subtitle={shortDate(venue.submittedAt)} />}
-        <ListRow icon="activity" title="Status" right={<Tag label={copy.label} bg={copy.bg} />} />
+        <ListRow
+          icon="activity"
+          title="Status"
+          subtitle={venue.submittedAt ? `Submitted ${shortDate(venue.submittedAt)}` : undefined}
+          right={<Tag label={copy.label} bg={copy.bg} fg={colors.ink} />}
+        />
         <ListRow
           icon="credit-card"
           title="Venue plan"
-          right={<Tag label={planActive ? 'Active' : awaitingActivation ? 'Activating' : status === 'verified' ? 'Not active' : 'After verification'} bg={planActive ? colors.mint : colors.surfaceSubtle} />}
+          subtitle={planPrice ? `${planPrice} / month + GST` : undefined}
+          right={<Tag label={planTag} bg={planActive ? colors.mint : colors.surfaceSubtle} fg={colors.ink} />}
           last
         />
       </ListGroup>
-
-      {status === 'verified' && !planActive && venuePlan && (
-        <Card bg={colors.ink} style={{ marginTop: space.md }}>
-          <AppText variant="caption" color="rgba(255,255,255,0.7)">
-            {venuePlan.name} plan
-          </AppText>
-          <AppText variant="h1" color={colors.white}>
-            {planPrice} <AppText color="rgba(255,255,255,0.7)">/ month + GST</AppText>
-          </AppText>
-          <AppText variant="caption" color="rgba(255,255,255,0.7)" style={{ marginTop: space.xs }}>
-            Paid through Razorpay by UPI, card or net banking. Project IRL never holds a balance or wallet for your venue.
-          </AppText>
-        </Card>
+      {canPay && (
+        <AppText variant="caption" color={colors.muted} style={{ marginTop: space.sm }}>
+          Paid via Razorpay by UPI, card or net banking. No wallet balance is held.
+        </AppText>
       )}
 
-      {(status === 'rejected' || status === 'in_review') && <Button title="Edit and resubmit" variant="ghost" style={{ marginTop: space.md }} onPress={onEdit} />}
+      {status === 'in_review' && <Button title="Edit application" variant="ghost" full={false} align="center" style={{ marginTop: space.md }} onPress={onEdit} />}
     </Screen>
   );
 }
@@ -174,7 +214,7 @@ export default function BusinessOnboardingScreen() {
   const myVenueQ = useRemote(fetchMyVenue, []);
   const plans = usePlans();
   const venuePlan = plans.venue;
-  const planPrice = venuePlan ? rupees(venuePlan.priceMonthly) : null;
+  const planPrice = venuePlan?.priceMonthly ? rupees(venuePlan.priceMonthly) : null;
 
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState(0);
@@ -232,12 +272,14 @@ export default function BusinessOnboardingScreen() {
   const emailError = f.email && !EMAIL_RE.test(f.email) ? 'Enter a valid email' : null;
 
   const valid = [
-    f.name.trim().length >= 2 && !!f.type && !gstinError,
+    f.name.trim().length >= 2 && !!f.type,
     f.address.trim().length >= 5 && !!f.area,
-    !!f.proof?.key && !uploading && f.contactName.trim().length >= 2 && PHONE_RE.test(f.phone) && (!f.email || !emailError),
+    !!f.proof?.key && !uploading && !gstinError,
+    f.contactName.trim().length >= 2 && PHONE_RE.test(f.phone) && (!f.email || !emailError),
     true,
     f.agreeLabels && f.agreeNoGuarantee && f.agreeTerms,
   ];
+  const lastStep = step === STEPS.length - 1;
 
   const uploadProof = async (asset) => {
     setUploading(true);
@@ -264,8 +306,9 @@ export default function BusinessOnboardingScreen() {
     }
   };
 
+  const canAddStaff = f.staffName.trim().length >= 2 && PHONE_RE.test(f.staffPhone);
   const addStaff = () => {
-    if (f.staffName.trim().length < 2 || !PHONE_RE.test(f.staffPhone)) return;
+    if (!canAddStaff) return;
     set({ staff: [...f.staff, { id: `${Date.now()}`, name: f.staffName.trim(), phone: f.staffPhone, role: f.staffRole }], staffName: '', staffPhone: '' });
   };
 
@@ -292,7 +335,7 @@ export default function BusinessOnboardingScreen() {
       setMyVenue(v);
       setEditing(false);
     } catch (e) {
-      setSubmitError(errorMessage(e, "We couldn't submit right now. Your answers are kept — try again."));
+      setSubmitError(errorMessage(e, "We couldn't submit right now. Your answers are kept. Try again."));
     } finally {
       setSubmitting(false);
     }
@@ -302,10 +345,10 @@ export default function BusinessOnboardingScreen() {
   if (!myVenue && myVenueQ.status !== 'ready' && !editing) {
     return (
       <Screen header={<ScreenHeader title="List your venue" />}>
-        <QueryState status={myVenueQ.status} error={myVenueQ.error} hasData={false} onRetry={myVenueQ.reload} skeletonRows={3} skeletonHeight={120} style={{ marginTop: space.md }}>
+        <QueryState status={myVenueQ.status} error={myVenueQ.error} hasData={false} onRetry={myVenueQ.reload} skeletonRows={3} skeletonHeight={72} style={{ marginTop: space.xs }}>
           <View />
         </QueryState>
-        {myVenueQ.status === 'error' ? <Button title="Start a new application" variant="ghost" onPress={() => setEditing(true)} /> : null}
+        {myVenueQ.status === 'error' ? <Button title="Start a new application" variant="ghost" full={false} align="center" onPress={() => setEditing(true)} /> : null}
       </Screen>
     );
   }
@@ -314,6 +357,7 @@ export default function BusinessOnboardingScreen() {
     return <VenueStatus venue={myVenue} venuePlan={venuePlan} planPrice={planPrice} onEdit={startEditing} onReload={myVenueQ.reload} refreshing={myVenueQ.refreshing} />;
   }
 
+  const goBack = step > 0 ? () => setStep((s) => s - 1) : myVenue ? () => setEditing(false) : undefined;
   const footer = (
     <View>
       {submitError && (
@@ -321,88 +365,60 @@ export default function BusinessOnboardingScreen() {
           {submitError}
         </AppText>
       )}
-      <View style={{ flexDirection: 'row', gap: space.xs }}>
-        {step > 0 && <Button title="Back" variant="secondary" full={false} onPress={() => setStep((s) => s - 1)} />}
-        <Button
-          title={step === STEPS.length - 1 ? 'Submit for verification' : 'Continue'}
-          style={{ flex: 1 }}
-          disabled={!valid[step] || submitting}
-          loading={submitting}
-          onPress={() => (step === STEPS.length - 1 ? submit() : setStep((s) => s + 1))}
-        />
-      </View>
+      <Button
+        title={lastStep ? 'Submit for verification' : step === 4 && !f.staff.length ? 'Skip for now' : 'Continue'}
+        disabled={!valid[step] || submitting}
+        loading={submitting}
+        onPress={() => (lastStep ? submit() : setStep((s) => s + 1))}
+      />
     </View>
   );
 
   return (
-    <Screen keyboard header={<ScreenHeader title="List your venue" subtitle={`Step ${step + 1} of ${STEPS.length} · ${STEPS[step]}`} onBack={step > 0 ? () => setStep((s) => s - 1) : undefined} />} footer={footer}>
-      <ProgressBar value={(step + 1) / STEPS.length} style={{ marginTop: space.xs, marginBottom: space.lg }} accessibilityLabel={`Step ${step + 1} of ${STEPS.length}`} />
+    <Screen keyboard header={<ScreenHeader title="List your venue" subtitle={`Step ${step + 1} of ${STEPS.length}`} onBack={goBack} />} footer={footer}>
+      <ProgressBar value={(step + 1) / STEPS.length} height={6} style={{ marginTop: space.xs, marginBottom: space.lg }} accessibilityLabel={`Step ${step + 1} of ${STEPS.length}: ${STEPS[step]}`} />
 
       {step === 0 && (
         <Animated.View entering={fadeIn()} key="s0">
-          <AppText variant="h2" style={{ marginBottom: space.md }} accessibilityRole="header">
-            Tell us about your place
-          </AppText>
+          <StepTitle title="About your place" subtitle="Members see this on your venue page." />
           <TextField label="Business or club name" value={f.name} onChangeText={(v) => set({ name: v })} placeholder="e.g. Sunrise Badminton Club" maxLength={60} />
-          <AppText variant="label" color={colors.inkSoft} style={{ marginBottom: 6 }}>
+          <AppText variant="label" color={colors.inkSoft} style={{ marginBottom: space.xs }}>
             Type
           </AppText>
-          {TYPES.map((t) => (
-            <OptionCard
-              key={t.id}
-              title={t.label}
-              selected={f.type === t.id}
-              onPress={() => set({ type: t.id })}
-              left={
-                <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: f.type === t.id ? colors.white : colors.surfaceSubtle, alignItems: 'center', justifyContent: 'center' }}>
-                  <Pictogram name={t.pictogram} size={22} />
-                </View>
-              }
-            />
-          ))}
-          <TextField
-            label="GSTIN (optional)"
-            value={f.gstin}
-            onChangeText={(v) => set({ gstin: v.toUpperCase() })}
-            placeholder="24ABCDE1234F1Z5"
-            autoCapitalize="characters"
-            maxLength={15}
-            error={gstinError}
-            helper="Needed for GST invoices on the Venue plan"
-            style={{ marginTop: space.md }}
-          />
-          <TextField label="Short description" value={f.about} onChangeText={(v) => set({ about: v })} placeholder="What makes your place great for groups?" multiline maxLength={240} />
+          {TYPES.map((t) => {
+            const on = f.type === t.id;
+            return (
+              <OptionCard
+                key={t.id}
+                title={t.label}
+                selected={on}
+                onPress={() => set({ type: t.id })}
+                left={<IconBubble size={40} tone="subtle" bg={on ? colors.white : undefined} pictogram={t.pictogram} iconSize={22} />}
+              />
+            );
+          })}
+          <TextField label="Short description (optional)" value={f.about} onChangeText={(v) => set({ about: v })} placeholder="What makes your place great for groups?" multiline maxLength={240} style={{ marginTop: space.md }} />
         </Animated.View>
       )}
 
       {step === 1 && (
         <Animated.View entering={fadeIn()} key="s1">
-          <AppText variant="h2" accessibilityRole="header">
-            Where are you?
-          </AppText>
-          <AppText color={colors.muted} style={{ marginTop: 4, marginBottom: space.md }}>
-            Only your public venue address is shown to members. Plans held here use it as the meeting point.
-          </AppText>
+          <StepTitle title="Where are you?" subtitle="Only this public address is shown to members." />
           <TextField label="Public address" value={f.address} onChangeText={(v) => set({ address: v })} placeholder="Building, street, landmark" multiline maxLength={160} icon="map-pin" />
-          <AppText variant="label" color={colors.inkSoft} style={{ marginBottom: 6 }}>
+          <AppText variant="label" color={colors.inkSoft} style={{ marginBottom: space.xs }}>
             Area{CITY.name ? ` in ${CITY.name}` : ''}
           </AppText>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
+          <ChipGrid columns={2}>
             {CITY.areas.map((a) => (
-              <Chip key={a} label={a} selected={f.area === a} onPress={() => set({ area: a })} />
+              <Chip key={a} label={a} fill selected={f.area === a} onPress={() => set({ area: a })} />
             ))}
-          </View>
+          </ChipGrid>
         </Animated.View>
       )}
 
       {step === 2 && (
         <Animated.View entering={fadeIn()} key="s2">
-          <AppText variant="h2" accessibilityRole="header">
-            Verify your business
-          </AppText>
-          <AppText color={colors.muted} style={{ marginTop: 4, marginBottom: space.md }}>
-            Upload one proof: shop & establishment licence, GST certificate, utility bill or club registration. It's stored privately and only our review team sees it.
-          </AppText>
+          <StepTitle title="Verify your business" subtitle="Licence, GST certificate, utility bill or club registration." />
           <Card
             onPress={uploading ? undefined : pickProof}
             elevated={false}
@@ -412,7 +428,7 @@ export default function BusinessOnboardingScreen() {
             {f.proof ? (
               <>
                 <View>
-                  <Image source={{ uri: f.proof.uri }} style={{ width: 96, height: 96, borderRadius: 16, opacity: uploading ? 0.5 : 1 }} accessibilityIgnoresInvertColors />
+                  <Image source={{ uri: f.proof.uri }} style={{ width: 96, height: 96, borderRadius: radius.sm, opacity: uploading ? 0.5 : 1 }} accessibilityIgnoresInvertColors />
                   {uploading ? (
                     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' }}>
                       <ActivityIndicator color={colors.ink} />
@@ -428,12 +444,12 @@ export default function BusinessOnboardingScreen() {
               </>
             ) : (
               <>
-                <Icon name="upload" size={26} />
+                <IconBubble size={44} tone="periwinkle" icon="upload" iconSize={22} />
                 <AppText variant="bodyStrong" style={{ marginTop: space.xs }}>
                   Upload proof
                 </AppText>
                 <AppText variant="caption" color={colors.muted}>
-                  Photo or scan · JPG/PNG · max 10 MB
+                  JPG or PNG · max 10 MB · seen only by reviewers
                 </AppText>
               </>
             )}
@@ -446,28 +462,40 @@ export default function BusinessOnboardingScreen() {
               {f.proof?.asset ? <Button title="Retry" size="xs" variant="secondary" full={false} onPress={() => uploadProof(f.proof.asset)} /> : null}
             </View>
           ) : null}
-          <TextField label="Contact person" value={f.contactName} onChangeText={(v) => set({ contactName: v })} placeholder="Full name" style={{ marginTop: space.lg }} />
-          <TextField label="Mobile" value={f.phone} onChangeText={(v) => set({ phone: v.replace(/\D/g, '') })} placeholder="98XXXXXXXX" keyboardType="phone-pad" maxLength={10} error={phoneError} icon="phone" />
-          <TextField label="Email (optional)" value={f.email} onChangeText={(v) => set({ email: v.trim() })} placeholder="owner@yourplace.in" keyboardType="email-address" autoCapitalize="none" error={emailError} icon="mail" />
+          <TextField
+            label="GSTIN (optional)"
+            value={f.gstin}
+            onChangeText={(v) => set({ gstin: v.toUpperCase() })}
+            placeholder="24ABCDE1234F1Z5"
+            autoCapitalize="characters"
+            maxLength={15}
+            error={gstinError}
+            helper="For GST invoices on the Venue plan"
+            style={{ marginTop: space.lg }}
+          />
         </Animated.View>
       )}
 
       {step === 3 && (
         <Animated.View entering={fadeIn()} key="s3">
-          <AppText variant="h2" accessibilityRole="header">
-            Add your team
-          </AppText>
-          <AppText color={colors.muted} style={{ marginTop: 4, marginBottom: space.md }}>
-            Optional. You'll be the owner. Staff roles let others help without sharing your login.
-          </AppText>
+          <StepTitle title="Who should we contact?" subtitle="We'll message this number about your review." />
+          <TextField label="Contact person" value={f.contactName} onChangeText={(v) => set({ contactName: v })} placeholder="Full name" />
+          <TextField label="Mobile" value={f.phone} onChangeText={(v) => set({ phone: v.replace(/\D/g, '') })} placeholder="98XXXXXXXX" keyboardType="phone-pad" maxLength={10} error={phoneError} icon="phone" />
+          <TextField label="Email (optional)" value={f.email} onChangeText={(v) => set({ email: v.trim() })} placeholder="owner@yourplace.in" keyboardType="email-address" autoCapitalize="none" error={emailError} icon="mail" />
+        </Animated.View>
+      )}
+
+      {step === 4 && (
+        <Animated.View entering={fadeIn()} key="s4">
+          <StepTitle title="Add your team" subtitle="Optional. Staff can help without your login." />
           {f.staff.length > 0 && (
-            <ListGroup style={{ marginBottom: space.md }}>
+            <ListGroup style={{ marginBottom: space.lg }}>
               {f.staff.map((m, i) => (
                 <ListRow
                   key={m.id}
                   icon="user"
                   title={m.name}
-                  subtitle={`${ROLES.find((r) => r.id === m.role)?.label} · +91 ${m.phone}`}
+                  subtitle={`${ROLES.find((r) => r.value === m.role)?.label} · +91 ${m.phone}`}
                   last={i === f.staff.length - 1}
                   right={<IconButton icon="x" size={36} variant="plain" accessibilityLabel={`Remove ${m.name}`} onPress={() => set({ staff: f.staff.filter((x) => x.id !== m.id) })} />}
                 />
@@ -476,76 +504,75 @@ export default function BusinessOnboardingScreen() {
           )}
           <TextField label="Name" value={f.staffName} onChangeText={(v) => set({ staffName: v })} placeholder="Team member's name" />
           <TextField label="Mobile" value={f.staffPhone} onChangeText={(v) => set({ staffPhone: v.replace(/\D/g, '') })} placeholder="98XXXXXXXX" keyboardType="phone-pad" maxLength={10} />
-          {ROLES.map((r) => (
-            <OptionCard key={r.id} title={r.label} subtitle={r.sub} selected={f.staffRole === r.id} onPress={() => set({ staffRole: r.id })} />
-          ))}
-          <Button title="Add team member" icon="user-plus" variant="secondary" style={{ marginTop: space.xs }} disabled={f.staffName.trim().length < 2 || !PHONE_RE.test(f.staffPhone)} onPress={addStaff} />
+          <AppText variant="label" color={colors.inkSoft} style={{ marginBottom: space.xs }}>
+            Role
+          </AppText>
+          <Segmented options={ROLES} value={f.staffRole} onChange={(v) => set({ staffRole: v })} />
+          <AppText variant="caption" color={colors.muted} style={{ marginTop: space.xs }}>
+            {ROLES.find((r) => r.value === f.staffRole)?.sub}
+          </AppText>
+          <Button title="Add team member" icon="user-plus" variant="secondary" style={{ marginTop: space.md }} disabled={!canAddStaff} onPress={addStaff} />
         </Animated.View>
       )}
 
-      {step === 4 && (
-        <Animated.View entering={fadeIn()} key="s4">
+      {step === 5 && (
+        <Animated.View entering={fadeIn()} key="s5">
+          <StepTitle title="Venue plan" subtitle="You pay nothing until you're verified." />
           {venuePlan ? (
-            <Card bg={colors.ink}>
-              <AppText variant="caption" color="rgba(255,255,255,0.7)">
+            <Card elevated={false} style={{ borderWidth: 1.2, borderColor: colors.border }}>
+              <AppText variant="label" color={colors.muted}>
                 {venuePlan.name} plan
               </AppText>
-              <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 2 }}>
-                <AppText variant="display" color={colors.white}>
-                  {planPrice}
+              {planPrice ? (
+                <View style={{ flexDirection: 'row', alignItems: 'flex-end', flexWrap: 'wrap', marginTop: space.xxs }}>
+                  <AppText variant="h1">{planPrice}</AppText>
+                  <AppText color={colors.muted} style={{ marginLeft: space.xs, marginBottom: 3 }}>
+                    / month + GST
+                  </AppText>
+                </View>
+              ) : (
+                <AppText variant="h3" style={{ marginTop: space.xxs }}>
+                  Price shown before you pay
                 </AppText>
-                <AppText color="rgba(255,255,255,0.7)" style={{ marginLeft: 6, marginBottom: 4 }}>
-                  / month + GST
-                </AppText>
-              </View>
-              <View style={{ marginTop: space.sm, gap: 6 }}>
-                {venuePlan.features.map((x) => (
-                  <View key={x} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Icon name="check" size={15} color={colors.periwinkle} />
-                    <AppText color={colors.white} style={{ marginLeft: 8, flex: 1 }}>
-                      {x}
-                    </AppText>
-                  </View>
-                ))}
-              </View>
-              <AppText variant="caption" color="rgba(255,255,255,0.6)" style={{ marginTop: space.sm }}>
-                You pay nothing until you're verified. You'll see the final price before activating.
-              </AppText>
+              )}
+              {(venuePlan.featureItems || []).length > 0 && (
+                <View style={{ marginTop: space.sm, gap: space.xs }}>
+                  {venuePlan.featureItems.map((x) => (
+                    <View key={x.key} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Icon name="check" size={16} color={colors.success} />
+                      <AppText style={{ marginLeft: space.xs, flex: 1 }}>{x.label}</AppText>
+                    </View>
+                  ))}
+                </View>
+              )}
             </Card>
           ) : plans.status === 'error' ? (
-            <Card elevated={false} bg={colors.surfaceSubtle}>
-              <AppText variant="caption" color={colors.inkSoft}>
-                Couldn't load Venue plan pricing. You can still submit — you'll see the price before paying.
+            <Card elevated={false} bg={colors.surfaceSubtle} style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginRight: space.sm }}>
+                Couldn't load pricing. You'll see it before paying.
               </AppText>
-              <Button title="Retry" size="xs" variant="secondary" full={false} style={{ marginTop: space.xs }} onPress={plans.reload} />
+              <Button title="Retry" size="xs" variant="secondary" full={false} onPress={plans.reload} />
             </Card>
           ) : (
-            <Skeleton height={180} r={radius.card} />
+            <Skeleton height={160} r={radius.card} />
           )}
+          <AppText variant="caption" color={colors.muted} style={{ marginTop: space.sm }}>
+            Billed via Razorpay with a GST invoice. No wallet balance is held.
+          </AppText>
 
-          <View style={{ backgroundColor: colors.surface, borderRadius: radius.quest, padding: space.md, marginTop: space.md }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Icon name="file-text" size={16} />
-              <AppText variant="label" style={{ marginLeft: 6 }}>
-                How business billing works
-              </AppText>
-            </View>
-            <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 6 }}>
-              After verification you pay through Razorpay (an authorised Indian payment gateway) by UPI, card or net banking, and get a GST invoice. Project IRL never holds a balance or wallet for your venue, and member bookings are paid to you directly.
-            </AppText>
-          </View>
-
-          <ListGroup style={{ marginTop: space.md }}>
-            <ListRow title="Sponsored content stays labelled" subtitle="I won't hide or remove “Sponsored” labels" toggle={f.agreeLabels} onToggle={(v) => set({ agreeLabels: v })} />
-            <ListRow title="No attendance guarantees" subtitle="I understand reach is not guaranteed attendance and won't promise it" toggle={f.agreeNoGuarantee} onToggle={(v) => set({ agreeNoGuarantee: v })} />
-            <ListRow title="Partner terms" subtitle="Public venue only · member safety rules apply · offers honoured as listed" toggle={f.agreeTerms} onToggle={(v) => set({ agreeTerms: v })} last />
+          <AppText variant="label" color={colors.inkSoft} style={{ marginTop: space.xl, marginBottom: space.xs }}>
+            Partner agreement
+          </AppText>
+          <ListGroup>
+            <ListRow title="Keep “Sponsored” labels" subtitle="I won't hide or remove them" toggle={f.agreeLabels} onToggle={(v) => set({ agreeLabels: v })} />
+            <ListRow title="No attendance promises" subtitle="Reach is not guaranteed turnout" toggle={f.agreeNoGuarantee} onToggle={(v) => set({ agreeNoGuarantee: v })} />
+            <ListRow title="Partner terms" subtitle="Public venue · safety rules · offers as listed" toggle={f.agreeTerms} onToggle={(v) => set({ agreeTerms: v })} last />
           </ListGroup>
-          {myVenue ? <Button title="Cancel editing" variant="ghost" style={{ marginTop: space.sm }} onPress={() => setEditing(false)} /> : null}
-          {!myVenue ? (
-            <AppText variant="label" color={colors.deep} align="center" style={{ marginTop: space.md }} onPress={() => nav.navigate('business_discovery')} accessibilityRole="button" suppressHighlighting>
-              Not now — browse partner places
-            </AppText>
-          ) : null}
+          {myVenue ? (
+            <Button title="Cancel editing" variant="ghost" full={false} align="center" style={{ marginTop: space.md }} onPress={() => setEditing(false)} />
+          ) : (
+            <Button title="Not now" variant="ghost" full={false} align="center" style={{ marginTop: space.md }} onPress={() => nav.navigate('business_discovery')} accessibilityLabel="Not now. Browse partner places" />
+          )}
         </Animated.View>
       )}
     </Screen>

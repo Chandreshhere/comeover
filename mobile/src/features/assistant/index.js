@@ -1,4 +1,4 @@
-﻿// Feature module: assistant (IRL Guide).
+﻿// Feature module: assistant (Come Over Guide).
 import PlanAssistantScreen from './PlanAssistantScreen';
 import AssistantResultScreen from './AssistantResultScreen';
 

@@ -6,6 +6,8 @@
 // People are never bundled: `personById` reads the store's user cache, which
 // is filled from API responses (activity hosts, nearby people, members…).
 
+import { PICTOGRAM_ICONS } from '@/components/iconMap';
+
 const DEFAULT_CATEGORIES = [
   { slug: 'chai', label: 'Chai & coffee', short: 'Chai', pictogram: 'chai' },
   { slug: 'badminton', label: 'Badminton', short: 'Badminton', pictogram: 'badminton' },
@@ -21,6 +23,8 @@ const DEFAULT_CATEGORIES = [
   { slug: 'music', label: 'Music & jams', short: 'Music', pictogram: 'music' },
   { slug: 'photo', label: 'Photography', short: 'Photo', pictogram: 'camera' },
   { slug: 'explore', label: 'City explore', short: 'Explore', pictogram: 'pin' },
+  { slug: 'thrifting', label: 'Thrifting', short: 'Thrift', pictogram: 'thrift' },
+  { slug: 'smoke', label: 'Smoke break', short: 'Smoke', pictogram: 'smoke' },
 ];
 
 const DEFAULT_LEVELS = [
@@ -40,7 +44,8 @@ const DEFAULT_CITY = {
   areas: ['Navrangpura', 'Bodakdev', 'Satellite', 'Vastrapur', 'Prahlad Nagar', 'SG Highway', 'Law Garden', 'Riverfront', 'Old City'],
 };
 
-const PICTOGRAMS = new Set(['chai', 'badminton', 'gym', 'music', 'pin', 'camera', 'run', 'sparkle', 'chat', 'sun', 'game', 'book', 'food', 'laptop', 'film', 'walk', 'board', 'star', 'check', 'calendar', 'people', 'shield']);
+// Pictogram keys the app can draw (components/iconMap.js).
+const PICTOGRAMS = new Set(Object.keys(PICTOGRAM_ICONS));
 
 export const categories = [...DEFAULT_CATEGORIES];
 export const categoryBySlug = Object.fromEntries(categories.map((c) => [c.slug, c]));

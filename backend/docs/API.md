@@ -95,7 +95,7 @@ Activity {
   id, title, category /* slug */, pictogram, description,
   startsAt, endsAt, durationMin, capacity, joinedCount,
   participants: string[],          // accepted user ids only (host first)
-  host: { id, name, reliability /* 0..1, 5% steps */, completed, level, avatarKey },
+  host: { id, name, reliability /* 0..1, 5% steps */, completed, level, avatarKey, socialStyle },
   area, venueName /* null unless you are host or accepted */, venueId /* partner venue */ | null, venueType,
   latitude, longitude, locationPrecision: 'exact'|'approx_300m'|'area',
   distanceM /* coarse */ | null, distanceBand /* '~600 m' */ | null,
@@ -110,6 +110,7 @@ Activity {
 }
 
 PublicUser   { id, name, area, distanceM?, distanceBand?, reliability, level, interests: string[],
+               socialStyle: 'introvert'|'ambivert'|'extrovert'|null /* self-described; ranking only, never filtering */,
                availability: 'now'|'later'|'busy', intent /* category slug */|null, completed, avatarKey, avatarUrl }
 
 Conversation { id, kind: 'direct'|'activity_group'|'circle', activityId, circleId, title, memberIds: string[], muted, unread,
@@ -164,7 +165,8 @@ TrustedContact { id, name, phone /* full E.164; visible to its owner only */, st
 
 Me           { id /* real user id */, phone, ageConfirmed, onboarded, status: 'active'|'limited'|'suspended', statusReason, statusUntil, memberSince,
                session: { ageConfirmed, termsAcceptedAt, onboarded, hasProfile },
-               profile: { id, name, bio, avatarKey, avatarUrl, city, area, interests, intents, visibility, boundaries, pronouns, languages, reliability } | null,
+               profile: { id, name, bio, avatarKey, avatarUrl, city, area, interests, intents, visibility, boundaries, pronouns, languages,
+                          socialStyle: 'introvert'|'ambivert'|'extrovert'|null, reliability } | null,
                prefs: { radiusKm, showOnRadar, analyticsConsent, dailyStreakOptIn, language,
                         notifications: { nearby, joinRequests, messages, questReminders, productUpdates, quietEnabled, quietStart, quietEnd } },
                availability: { status, activities: string[], until, area }, subscription: Subscription }
@@ -247,7 +249,8 @@ Auth: App. Suspended accounts may call it.
 Auth: App.
 
 - Body (all fields optional):
-  - Profile: `{ name, bio, avatarKey, city, area, interests: slug[] /* ≤12 */, intents: string[], visibility: 'discoverable'|'friends_only'|'hidden', boundaries, pronouns, languages }`
+  - Profile: `{ name, bio, avatarKey, city, area, interests: slug[] /* ≤12 */, intents: string[], visibility: 'discoverable'|'friends_only'|'hidden', boundaries, pronouns, languages, socialStyle: 'introvert'|'ambivert'|'extrovert'|null }`
+  - `socialStyle` is the "What are you?" answer asked after onboarding (`null` clears it). It is shown on PublicUser and the plan host, and only ever changes the order of people and plans — nobody is hidden because of it.
   - Flags: `{ ageConfirmed: true, termsAccepted: true, onboardingCompleted: true }`
 - The first call creates the profile and requires `name`.
 - `ageConfirmed: true` is a self-declared 18+ (no date of birth is stored). It is required before creating or joining plans.
@@ -334,11 +337,16 @@ Auth: App. Paginated.
 
 - Query:
   - Location: `lat&lng`, or `area` (a city area name). With neither, results are city-wide.
-  - `radius` (km, 0.2–25, default 3), `category` (slug).
+  - `radius` (km, 0.2–25, default 3), `category` (one slug or a comma list of up to 10, e.g. `thrifting,smoke`).
   - `when`: `any` (default), `now`, `today`, `tonight`, `tomorrow` or `weekend`.
   - `q` (text, ≤80).
-- Returns: `{ items: Activity[], nextCursor }`, ordered by start time then distance. Sponsored plans are not boosted.
+- Returns: `{ items: Activity[], nextCursor, rankedFor: 'introvert'|'ambivert'|'extrovert'|null }`, ordered by start time then distance. When the caller has a `socialStyle`, plans inside each page get a gentle nudge (group size and how calm or lively the category is; a plan moves at most ~2 places, nothing is dropped) and `rankedFor` names the style used, so clients don't apply it twice. Sponsored plans are not boosted.
 - Errors: `invalid_location`.
+
+#### Social style matching
+Same style = 1.0, introvert↔ambivert = 0.8, extrovert↔ambivert = 0.8, introvert↔extrovert = 0.45, unknown = 0.6 (neutral).
+Plans: introverts favour small groups (≤4) and calm categories, extroverts bigger groups (≥5) and lively ones, ambiverts mid-size (3–6).
+Implemented in `src/lib/socialMatch.js`, a port of the app's `src/utils/socialMatch.js` — keep the two in step.
 
 ### `GET /activities/featured`
 Auth: App.
@@ -383,7 +391,7 @@ Auth: App.
 Auth: App. Paginated.
 
 - Query: `lat&lng` or `area`, plus `radius`.
-- Returns: `{ items: PublicUser[], nextCursor }`. People who are free now come first. Only discoverable users with `showOnRadar` on are included, and blocked users never appear.
+- Returns: `{ items: PublicUser[], nextCursor }`. Ordered by social-energy match with the caller first (see "Social style matching"; never filtered), then people who are free now, then distance. Only discoverable users with `showOnRadar` on are included, and blocked users never appear.
 - Errors: `location_required`.
 
 ### `GET /venues`

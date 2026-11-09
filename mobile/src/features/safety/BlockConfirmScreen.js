@@ -1,19 +1,23 @@
 // Block confirmation (modal) — consequences explained before acting.
+// One primary (danger) action; "Block and report" is the quiet alternative.
 import React, { useState } from 'react';
 import { View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { AppText, Avatar, Button, Card, EmptyState, Icon, Screen, ScreenHeader } from '@/components';
+import { ChatCircleSlash } from 'phosphor-react-native/src/icons/ChatCircleSlash';
+import { AppText, Avatar, Button, EmptyState, ListGroup, Screen, ScreenHeader } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import { colors, space } from '@/theme/tokens';
 import haptics from '@/utils/haptics';
+import IconBubble from '@/features/system/IconBubble';
 import usePerson from './usePerson';
 
+// [icon, text, bubble tone]
 const CONSEQUENCES = [
-  ['eye-off', "They can't see your profile or plans"],
-  ['message-circle', "They can't message you; your direct chat is hidden"],
-  ['bell-off', "They aren't notified that you blocked them"],
-  ['users', "If you're both in a plan, you can leave it without it counting against you"],
-  ['rotate-ccw', 'You can unblock anytime in Settings'],
+  ['eye-off', "They can't see your profile or plans", 'lavender'],
+  [ChatCircleSlash, "They can't message you", 'pink'],
+  ['bell-off', "They aren't notified", 'orange'],
+  ['log-out', 'Leave shared plans with no penalty', 'periwinkle'],
+  ['rotate-ccw', 'Unblock anytime in Settings', 'mint'],
 ];
 
 export default function BlockConfirmScreen() {
@@ -65,8 +69,7 @@ export default function BlockConfirmScreen() {
         ) : (
           <View style={{ gap: space.xs }}>
             <Button title={`Block ${person.name}`} variant="danger" icon="slash" loading={busy === 'block'} disabled={!!busy} onPress={() => run('block')} />
-            <Button title="Block and report" variant="secondary" icon="flag" loading={busy === 'block_report'} disabled={!!busy} onPress={() => run('block_report')} />
-            <Button title="Cancel" variant="ghost" disabled={!!busy} onPress={() => nav.goBack()} />
+            <Button title="Block and report" variant="ghost" icon="flag" loading={busy === 'block_report'} disabled={!!busy} onPress={() => run('block_report')} />
           </View>
         )
       }
@@ -77,21 +80,21 @@ export default function BlockConfirmScreen() {
           {isBlocked ? `${person.name} is blocked` : `Block ${person.name}?`}
         </AppText>
         <AppText color={colors.muted} align="center" style={{ marginTop: space.xs, maxWidth: 300 }}>
-          {isBlocked ? "You won't see each other anywhere in Project IRL." : 'Blocking is private and takes effect immediately.'}
+          {isBlocked ? "You won't see each other anywhere in Come Over." : 'Blocking is private and takes effect immediately.'}
         </AppText>
       </View>
-      <Card style={{ marginTop: space.xl }}>
-        {CONSEQUENCES.map(([icon, text], i) => (
-          <View key={text} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: i === CONSEQUENCES.length - 1 ? 0 : space.md }}>
-            <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.surfaceSubtle, alignItems: 'center', justifyContent: 'center' }}>
-              <Icon name={icon} size={16} />
+      {!isBlocked && (
+        <ListGroup style={{ marginTop: space.xl }}>
+          {CONSEQUENCES.map(([icon, text, tone], i) => (
+            <View key={text} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 56, paddingVertical: space.xs, borderBottomWidth: i === CONSEQUENCES.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
+              <IconBubble icon={icon} tone={tone} size={36} iconSize={18} />
+              <AppText color={colors.inkSoft} style={{ flex: 1, marginLeft: space.sm }}>
+                {text}
+              </AppText>
             </View>
-            <AppText variant="label" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.sm }}>
-              {text}
-            </AppText>
-          </View>
-        ))}
-      </Card>
+          ))}
+        </ListGroup>
+      )}
       {error ? (
         <AppText variant="caption" color={colors.danger} align="center" style={{ marginTop: space.md }} accessibilityLiveRegion="polite">
           {error}

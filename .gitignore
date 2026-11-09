@@ -41,3 +41,9 @@ docs/Project_IRL_Implementation_Pack.zip
 .DS_Store
 Thumbs.db
 *.log
+
+# macOS AppleDouble files (repo lives on an exFAT drive)
+._*
+
+# Per-machine Xcode env (local Node path)
+mobile/ios/.xcode.env.local

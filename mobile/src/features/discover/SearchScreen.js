@@ -4,22 +4,27 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { ClockCounterClockwise } from 'phosphor-react-native/src/icons/ClockCounterClockwise';
+import { MapPinArea } from 'phosphor-react-native/src/icons/MapPinArea';
+import { Storefront } from 'phosphor-react-native/src/icons/Storefront';
 import {
   ActivityCard,
   AppText,
   Avatar,
   Chip,
+  ChipGrid,
   EmptyState,
   ErrorState,
   Icon,
   IconButton,
-  Pictogram,
   Screen,
   SearchBar,
   SectionHeader,
   Skeleton,
   Tag,
+  usePressScale,
 } from '@/components';
+import { IconBubble } from '@/components/Card';
 import { categories, categoryBySlug, CITY } from '@/data/catalog';
 import { useAppStore } from '@/store/useAppStore';
 import { accents, colors, layout, radius, space } from '@/theme/tokens';
@@ -28,10 +33,34 @@ import { coarseDistance } from '@/utils/format';
 import useJoinAction from '@/features/plans/joinActions';
 import { applyFilters, countActiveFilters, joinUiState, visibleActivities } from './utils';
 
-const SUGGESTIONS = ['chai near me', 'badminton tonight', 'gym partner', 'board games', 'run tomorrow'];
 const DEBOUNCE_MS = 300;
 
 const norm = (s = '') => s.toLowerCase().trim();
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+// "Browse by activity" tile: white card, pastel icon bubble, springy press.
+function CategoryTile({ c, i, onPress }) {
+  const press = usePressScale(0.96);
+  const accent = accents[i % accents.length];
+  return (
+    <AnimatedPressable
+      onPress={onPress}
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
+      accessibilityRole="button"
+      accessibilityLabel={c.label}
+      style={[{ flex: 1, backgroundColor: colors.surface, borderRadius: radius.quest, padding: space.sm, flexDirection: 'row', alignItems: 'center', minHeight: 64 }, press.style]}
+    >
+      <IconBubble size={40} bg={accent.bg} pictogram={c.pictogram} iconSize={22} />
+      <AppText variant="label" style={{ marginLeft: space.xs, flex: 1 }} numberOfLines={2}>
+        {c.label}
+      </AppText>
+    </AnimatedPressable>
+  );
+}
+
+// One row inside a white grouped list (people / places).
+const rowStyle = (last) => ({ flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm, minHeight: 64, borderBottomWidth: last ? 0 : 1, borderBottomColor: colors.border });
 
 export default function SearchScreen() {
   const nav = useNavigation();
@@ -101,40 +130,24 @@ export default function SearchScreen() {
           <>
             <SectionHeader title="Recent" action="Clear" onAction={() => setRecents([])} />
             {recents.map((r) => (
-              <Pressable key={r} onPress={() => commit(r)} accessibilityRole="button" accessibilityLabel={`Search ${r}`} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12 }}>
-                <Icon name="clock" size={16} color={colors.muted} />
-                <AppText style={{ flex: 1, marginLeft: space.sm }}>{r}</AppText>
+              <Pressable key={r} onPress={() => commit(r)} accessibilityRole="button" accessibilityLabel={`Search ${r}`} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, paddingVertical: space.xs }}>
+                <ClockCounterClockwise size={18} color={colors.muted} weight="bold" />
+                <AppText style={{ flex: 1, marginHorizontal: space.sm }} numberOfLines={1}>
+                  {r}
+                </AppText>
                 <Icon name="arrow-up-left" size={16} color={colors.muted} />
               </Pressable>
             ))}
           </>
         )}
-        <SectionHeader title="Try" />
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
-          {SUGGESTIONS.map((s) => (
-            <Chip key={s} label={s} icon="search" onPress={() => commit(s)} />
-          ))}
-        </View>
-        <SectionHeader title="Browse by activity" />
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: space.xs }}>
+        <SectionHeader title="Browse by activity" style={recents.length ? null : { marginTop: space.md }} />
+        <ChipGrid columns={2}>
           {categories.map((c, i) => (
-            <Animated.View key={c.slug} entering={enter(i)} style={{ width: '48.5%' }}>
-              <Pressable
-                onPress={() => nav.navigate('category_results', { category: c.slug })}
-                accessibilityRole="button"
-                accessibilityLabel={c.label}
-                style={{ backgroundColor: accents[i % accents.length].bg, borderRadius: radius.quest, padding: space.sm, flexDirection: 'row', alignItems: 'center', minHeight: 60 }}
-              >
-                <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' }}>
-                  <Pictogram name={c.pictogram} size={20} color={colors.white} />
-                </View>
-                <AppText variant="label" style={{ marginLeft: space.xs, flex: 1 }} numberOfLines={2}>
-                  {c.label}
-                </AppText>
-              </Pressable>
+            <Animated.View key={c.slug} entering={enter(Math.min(i, 8))} style={{ flex: 1 }}>
+              <CategoryTile c={c} i={i} onPress={() => nav.navigate('category_results', { category: c.slug })} />
             </Animated.View>
           ))}
-        </View>
+        </ChipGrid>
       </>
     );
   } else if (state.status === 'error' && !searching) {
@@ -151,7 +164,7 @@ export default function SearchScreen() {
     body = (
       <EmptyState
         title={`Nothing for “${q.trim()}” yet`}
-        body="Nobody's posted this nearby. Start it and people searching for the same thing can join."
+        body="Start it and others nearby can join."
         cta="Create this plan"
         onCta={() => nav.navigate('create_activity_type', { title: q.trim() })}
         secondary={filterCount ? 'Clear filters' : undefined}
@@ -163,7 +176,7 @@ export default function SearchScreen() {
       <>
         {results.plans.length > 0 && (
           <>
-            <SectionHeader title={`Plans · ${results.plans.length}`} />
+            <SectionHeader title="Plans" right={<AppText variant="caption" color={colors.muted}>{results.plans.length}</AppText>} />
             <View style={{ gap: space.sm }}>
               {results.plans.map((a, i) => (
                 <ActivityCard
@@ -194,12 +207,14 @@ export default function SearchScreen() {
                     onPress={() => (cat ? nav.navigate('category_results', { category: p.intent }) : nav.navigate('create_activity_type'))}
                     accessibilityRole="button"
                     accessibilityLabel={`${p.name}${cat ? `, up for ${cat.label}` : ''}${p.area ? `, around ${p.area}` : ''}`}
-                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: i === results.people.length - 1 ? 0 : 1, borderBottomColor: colors.border }}
+                    style={rowStyle(i === results.people.length - 1)}
                   >
                     <Avatar seed={p.id} uri={p.avatarUrl} size={40} />
-                    <View style={{ flex: 1, marginLeft: space.sm }}>
-                      <AppText variant="bodyStrong">{p.name}</AppText>
-                      <AppText variant="caption" color={colors.muted}>
+                    <View style={{ flex: 1, marginHorizontal: space.sm }}>
+                      <AppText variant="bodyStrong" numberOfLines={1}>
+                        {p.name}
+                      </AppText>
+                      <AppText variant="caption" color={colors.muted} numberOfLines={1}>
                         {[cat && `Up for ${cat.short.toLowerCase()}`, p.availability === 'now' ? 'free now' : 'later today', p.distanceM != null && `~${coarseDistance(p.distanceM)}`].filter(Boolean).join(' · ')}
                       </AppText>
                     </View>
@@ -220,18 +235,18 @@ export default function SearchScreen() {
                   onPress={() => (p.kind === 'venue' ? nav.navigate('business_profile', { id: p.id }) : setQ(p.title))}
                   accessibilityRole="button"
                   accessibilityLabel={`${p.title}. ${p.subtitle}`}
-                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: i === results.places.length - 1 ? 0 : 1, borderBottomColor: colors.border }}
+                  style={rowStyle(i === results.places.length - 1)}
                 >
-                  <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: p.kind === 'venue' ? colors.orangeSoft : colors.periwinkleWash, alignItems: 'center', justifyContent: 'center' }}>
-                    <Icon name={p.kind === 'venue' ? 'home' : 'map-pin'} size={18} />
-                  </View>
-                  <View style={{ flex: 1, marginLeft: space.sm }}>
-                    <AppText variant="bodyStrong">{p.title}</AppText>
-                    <AppText variant="caption" color={colors.muted}>
+                  <IconBubble size={40} shape="squircle" tone={p.kind === 'venue' ? 'orange' : 'periwinkle'} glyph={p.kind === 'venue' ? Storefront : MapPinArea} iconSize={22} />
+                  <View style={{ flex: 1, marginHorizontal: space.sm }}>
+                    <AppText variant="bodyStrong" numberOfLines={1}>
+                      {p.title}
+                    </AppText>
+                    <AppText variant="caption" color={colors.muted} numberOfLines={1}>
                       {p.subtitle}
                     </AppText>
                   </View>
-                  {p.sponsored && <Tag label="Sponsored" bg={colors.orangeSoft} />}
+                  {p.sponsored ? <Tag label="Sponsored" bg={colors.orangeSoft} /> : <Icon name="chevron-right" size={18} color={colors.muted} />}
                 </Pressable>
               ))}
             </View>
@@ -254,18 +269,21 @@ export default function SearchScreen() {
         </View>
       }
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.xs, minHeight: 24 }}>
-        {filterCount > 0 && (
-          <>
-            <Tag label={`${filterCount} filter${filterCount > 1 ? 's' : ''} on`} icon="sliders" bg={colors.ink} fg={colors.white} />
-            <AppText variant="label" color={colors.deep} style={{ marginLeft: space.xs }} onPress={() => nav.navigate('filters_sheet')}>
-              Edit
-            </AppText>
-          </>
-        )}
-        <View style={{ flex: 1 }} />
-        {searching && state.result && <ActivityIndicator size="small" color={colors.deep} accessibilityLabel="Updating results" />}
-      </View>
+      {(filterCount > 0 || (searching && state.result)) && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.xs }}>
+          {filterCount > 0 && (
+            <Chip
+              label={`${filterCount} filter${filterCount > 1 ? 's' : ''} on`}
+              icon="sliders"
+              selected
+              accessibilityLabel={`${filterCount} filter${filterCount > 1 ? 's' : ''} on. Edit filters`}
+              onPress={() => nav.navigate('filters_sheet')}
+            />
+          )}
+          <View style={{ flex: 1 }} />
+          {searching && state.result && <ActivityIndicator size="small" color={colors.deep} accessibilityLabel="Updating results" />}
+        </View>
+      )}
       {body}
     </Screen>
   );

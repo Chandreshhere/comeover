@@ -15,6 +15,8 @@ const ProfileSchema = sub({
   boundaries: { type: String, maxlength: 240, default: null },
   languages: { type: [String], default: [] },
   reliabilityScore: { type: Number, min: 0, max: 1, default: 1 },
+  // Self-described social energy; used only to rank people and plans (never to hide anyone).
+  socialStyle: { type: String, enum: ['introvert', 'ambivert', 'extrovert'], default: null },
   preferences: { type: Mixed, default: () => ({}) }, // pronouns, avatarSeed, availabilityWindows, radiusKm, showOnRadar, analyticsConsent, language, onboardedAt…
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

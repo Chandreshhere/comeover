@@ -12,6 +12,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { purchase } from '@/services/billing';
 import haptics from '@/utils/haptics';
 import { shortDate, storeName, usePlans } from './plans';
+import { BenefitRow, PriceText, toneColors } from './PaywallParts';
 
 // status: idle | purchasing | success | pending | pending_verification | cancelled | failed
 export default function PremiumCheckoutScreen() {
@@ -46,7 +47,7 @@ export default function PremiumCheckoutScreen() {
         <ErrorState
           kind="api"
           title="This plan isn't sold in the app"
-          body={plan.billing === 'invoice' ? 'Venue / Club plans are invoiced after verification.' : 'This plan is free — nothing to buy.'}
+          body={plan.billing === 'invoice' ? 'Venue / Club plans are invoiced after verification.' : 'This plan is free, nothing to buy.'}
           onRetry={() => nav.navigate(plan.billing === 'invoice' ? 'business_onboarding' : 'premium_compare')}
           retryLabel={plan.billing === 'invoice' ? 'Set up a venue' : 'See plans'}
         />
@@ -54,8 +55,9 @@ export default function PremiumCheckoutScreen() {
     );
   }
 
-  const price = plans.priceLabel(plan);
+  const price = plans.storePrice(plan);
   const storeReady = !!product;
+  const tone = toneColors(plan.tier === 'pro' ? 'orange' : 'periwinkle');
 
   const buy = async () => {
     if (status === 'purchasing') return;
@@ -99,56 +101,56 @@ export default function PremiumCheckoutScreen() {
   if (status === 'success') {
     return (
       <Screen header={<ScreenHeader title="" back={false} />} footer={<Button title="Done" onPress={() => nav.goBack()} />}>
-        <Animated.View entering={fadeIn()} style={{ alignItems: 'center', marginTop: space.xl }}>
-          <View style={{ backgroundColor: colors.periwinkle, borderRadius: radius.hero, padding: space.lg, alignItems: 'center', width: '100%' }}>
-            <Mascot size={170} mood="celebrate" celebrateKey={celebrate} />
-          </View>
-          <AppText variant="h1" align="center" style={{ marginTop: space.lg }} accessibilityRole="header" accessibilityLiveRegion="polite">
+        <Animated.View entering={fadeIn()} style={{ alignItems: 'center', marginTop: space.lg }}>
+          <Mascot size={160} mood="celebrate" celebrateKey={celebrate} />
+          <AppText variant="h1" align="center" style={{ marginTop: space.md }} accessibilityRole="header" accessibilityLiveRegion="polite">
             You're on {plan.name}
           </AppText>
-          <AppText color={colors.muted} align="center" style={{ marginTop: space.xs, maxWidth: 300 }}>
-            {subscription.expiresAt ? `Renews ${shortDate(subscription.expiresAt)}` : 'Renews monthly'} through {storeName()}. Manage or cancel anytime in your store settings.
+          <AppText color={colors.muted} align="center" style={{ marginTop: space.xs }}>
+            {subscription.expiresAt ? `Renews ${shortDate(subscription.expiresAt)}` : 'Renews monthly'} · manage in {storeName()}
           </AppText>
-          {plan.features.length > 0 && (
-            <Card style={{ marginTop: space.lg, alignSelf: 'stretch' }}>
-              {plan.features.slice(0, 4).map((f) => (
-                <View key={f} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
-                  <Icon name="check" size={16} color={colors.success} />
-                  <AppText style={{ marginLeft: 8, flex: 1 }}>{f}</AppText>
-                </View>
-              ))}
-            </Card>
-          )}
         </Animated.View>
+        {plan.newItems?.length > 0 && (
+          <Card style={{ marginTop: space.xl }}>
+            <AppText variant="label" color={colors.muted} style={{ marginBottom: space.xxs }}>
+              Unlocked for you
+            </AppText>
+            {plan.newItems.slice(0, 4).map((f) => (
+              <BenefitRow key={f.key} item={f} compact style={{ paddingVertical: space.xxs }} />
+            ))}
+          </Card>
+        )}
       </Screen>
     );
   }
 
+  const store = storeName();
   const banner =
     status === 'pending'
-      ? { icon: 'clock', bg: colors.orangeSoft, title: 'Payment pending', body: `${storeName()} is waiting for your payment to clear. ${plan.name} unlocks as soon as it's confirmed — nothing to do here.` }
+      ? { icon: 'clock', bg: colors.orangeSoft, title: 'Payment pending', body: `${plan.name} unlocks as soon as ${store} confirms the payment.` }
       : status === 'pending_verification'
-      ? { icon: 'refresh-cw', bg: colors.orangeSoft, title: 'Confirming your purchase', body: `${storeName()} took the payment and we're verifying it. This usually takes under a minute.` }
+      ? { icon: 'refresh-cw', bg: colors.orangeSoft, title: 'Confirming your purchase', body: 'This usually takes under a minute.' }
       : status === 'cancelled'
-      ? { icon: 'x-circle', bg: colors.surfaceSubtle, title: 'Purchase cancelled', body: 'No charge was made. You can try again whenever you like.' }
+      ? { icon: 'x-circle', bg: colors.surfaceSubtle, title: 'Purchase cancelled', body: 'No charge was made.' }
       : status === 'failed'
       ? { icon: 'alert-circle', bg: colors.pinkSoft, title: 'Purchase didn’t go through', body: error }
       : null;
 
   const waiting = status === 'pending' || status === 'pending_verification';
+  const extra = (plan.newItems?.length || 0) - 3;
 
   return (
     <Screen
       header={<ScreenHeader title="Checkout" />}
       footer={
         waiting ? (
-          <View style={{ gap: space.xs }}>
+          <View>
             <Button title="Check status" icon="refresh-cw" loading={checking} disabled={checking} onPress={recheck} />
-            <Button title="Back to plans" variant="secondary" onPress={() => nav.goBack()} />
+            <Button title="Back to plans" variant="ghost" style={{ marginTop: space.xs }} onPress={() => nav.goBack()} />
           </View>
         ) : (
           <Button
-            title={currentTier === plan.tier ? 'You already have this plan' : `Subscribe · ${price}/month`}
+            title={currentTier === plan.tier ? 'You already have this plan' : price ? `Subscribe · ${price}/month` : 'Subscribe'}
             loading={status === 'purchasing'}
             disabled={currentTier === plan.tier || status === 'purchasing' || (!storeReady && plans.status === 'ready')}
             onPress={buy}
@@ -157,86 +159,88 @@ export default function PremiumCheckoutScreen() {
       }
     >
       {banner && (
-        <Animated.View entering={fadeIn()} accessibilityLiveRegion="polite" style={{ backgroundColor: banner.bg, borderRadius: radius.quest, padding: space.md, flexDirection: 'row', marginTop: space.xs }}>
+        <Animated.View entering={fadeIn()} accessibilityLiveRegion="polite" style={{ backgroundColor: banner.bg, borderRadius: radius.quest, padding: space.md, flexDirection: 'row', alignItems: 'center', marginTop: space.xs }}>
           <Icon name={banner.icon} size={20} />
           <View style={{ flex: 1, marginLeft: space.sm }}>
             <AppText variant="bodyStrong">{banner.title}</AppText>
-            <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 2 }}>
-              {banner.body}
-            </AppText>
+            {!!banner.body && (
+              <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 2 }}>
+                {banner.body}
+              </AppText>
+            )}
           </View>
         </Animated.View>
       )}
       {!storeReady && plans.status === 'ready' && (
-        <View style={{ backgroundColor: colors.surfaceSubtle, borderRadius: radius.quest, padding: space.md, flexDirection: 'row', marginTop: space.xs }} accessibilityLiveRegion="polite">
+        <View style={{ backgroundColor: colors.surfaceSubtle, borderRadius: radius.quest, padding: space.md, flexDirection: 'row', alignItems: 'center', marginTop: space.xs }} accessibilityLiveRegion="polite">
           <Icon name="alert-circle" size={18} />
           <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.sm }}>
-            {storeName()} isn't available on this device right now, so this plan can't be bought here. Make sure you're signed in to {storeName()} and try again.
+            {store} isn't available on this device. Sign in to {store} and try again.
           </AppText>
         </View>
       )}
 
+      {/* The plan: name, price and what it adds */}
       <Animated.View entering={enter(0)}>
-        <Card bg={colors.periwinkle} elevated={false} style={{ marginTop: space.md, flexDirection: 'row', alignItems: 'center' }} r={radius.hero}>
-          <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' }}>
-            <Pictogram name={plan.pictogram} size={28} color={colors.white} />
-          </View>
-          <View style={{ flex: 1, marginLeft: space.sm }}>
-            <AppText variant="h2">IRL {plan.name}</AppText>
-            {!!plan.target && (
-              <AppText variant="caption" color={colors.inkSoft}>
-                {plan.target}
+        <Card style={{ marginTop: space.md }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: tone.bg, alignItems: 'center', justifyContent: 'center' }}>
+              <Pictogram name={plan.pictogram} size={26} color={colors.ink} duotoneColor={tone.duo} duotoneOpacity={0.7} />
+            </View>
+            <View style={{ flex: 1, marginHorizontal: space.sm }}>
+              <AppText variant="h2" numberOfLines={1}>
+                Come Over {plan.name}
               </AppText>
-            )}
+              {!!plan.target && (
+                <AppText variant="caption" color={colors.muted} numberOfLines={2}>
+                  {/^for\b/i.test(plan.target) ? plan.target : `For ${plan.target}`}
+                </AppText>
+              )}
+            </View>
+            <PriceText price={price} loading={plans.status === 'loading' && !product} />
           </View>
+          {plan.newItems?.length > 0 && (
+            <View style={{ marginTop: space.sm, paddingTop: space.xs, borderTopWidth: 1, borderTopColor: colors.border }}>
+              {plan.newItems.slice(0, 3).map((f) => (
+                <BenefitRow key={f.key} item={f} compact style={{ paddingVertical: space.xxs }} />
+              ))}
+              {extra > 0 && (
+                <AppText variant="caption" color={colors.muted} style={{ marginLeft: 32 + space.sm, marginTop: space.xxs }}>
+                  + {extra} more
+                </AppText>
+              )}
+            </View>
+          )}
         </Card>
       </Animated.View>
 
       {/* Order summary */}
       <Animated.View entering={enter(1)}>
-        <Card style={{ marginTop: space.md }}>
-          <AppText variant="h3">Order summary</AppText>
+        <Card style={{ marginTop: space.md }} padding={0}>
           {[
-            ['Plan', `${plan.name} (monthly)`],
-            ['Price', `${price} / month`],
-            ['Billed by', storeName()],
-            ['Renews', 'Every month until cancelled'],
-          ].map(([k, v]) => (
-            <View key={k} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+            ['Billed', 'Monthly, until you cancel'],
+            ['Paid through', store],
+            ['Taxes', `Shown by ${store} before you confirm`],
+          ].map(([k, v], i) => (
+            <View key={k} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 52, paddingHorizontal: space.md, paddingVertical: space.sm, borderTopWidth: i ? 1 : 0, borderTopColor: colors.border }}>
               <AppText color={colors.muted}>{k}</AppText>
-              <AppText variant="bodyStrong">{v}</AppText>
+              <AppText variant="bodyStrong" align="right" style={{ flex: 1, marginLeft: space.md }}>
+                {v}
+              </AppText>
             </View>
           ))}
-          <AppText variant="caption" color={colors.muted} style={{ marginTop: space.sm }}>
-            Taxes, if any, are shown by {storeName()} before you confirm.
-          </AppText>
         </Card>
       </Animated.View>
 
-      {/* Store billing explainer */}
-      <Animated.View entering={enter(2)}>
-        <View style={{ backgroundColor: colors.surface, borderRadius: radius.quest, padding: space.md, marginTop: space.md }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Icon name="lock" size={16} />
-            <AppText variant="label" style={{ marginLeft: 6 }}>
-              Paid securely through {storeName()}
-            </AppText>
-          </View>
-          <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 6 }}>
-            In-app features are sold through {storeName()} billing as the store requires. We never see or store your card, UPI PIN or bank details. The subscription renews monthly until you cancel in {storeName()} settings at least 24 hours before the renewal date.
-          </AppText>
-          <AppText variant="label" color={colors.deep} style={{ marginTop: space.sm }} onPress={() => nav.navigate('subscription_manage')} accessibilityRole="button" suppressHighlighting>
-            Restore purchases
-          </AppText>
-        </View>
-      </Animated.View>
-
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.md, paddingHorizontal: 4 }}>
-        <Icon name="shield" size={14} color={colors.muted} />
-        <AppText variant="caption" color={colors.muted} style={{ marginLeft: 6, flex: 1 }}>
-          Safety, reporting, blocking, joining and accepted-plan chat stay free whatever you choose.
+      {/* Store billing terms */}
+      <Animated.View entering={enter(2)} style={{ marginTop: space.lg }}>
+        <AppText variant="caption" color={colors.muted}>
+          We never see your card, UPI or bank details. Renews monthly until you cancel in {store} settings at least 24 hours before renewal.
         </AppText>
-      </View>
+        <AppText variant="label" color={colors.deep} style={{ marginTop: space.xxs, paddingVertical: space.sm, alignSelf: 'flex-start' }} onPress={() => nav.navigate('subscription_manage', { restore: true })} accessibilityRole="button" suppressHighlighting>
+          Restore purchases
+        </AppText>
+      </Animated.View>
     </Screen>
   );
 }

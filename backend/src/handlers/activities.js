@@ -302,7 +302,7 @@ const routes = {
     const rows = await Participant.find({ activityId: a._id, userId: { $ne: user.id }, state: { $in: ['requested', 'waitlisted', 'accepted', 'checked_in'] } }).lean();
     rows.sort((x, y) => (y.state === 'requested') - (x.state === 'requested') || new Date(x.requestedAt) - new Date(y.requestedAt));
     const users = await User.find({ _id: { $in: rows.map((r) => r.userId) } })
-      .select('profile progress availability')
+      .select('profile progress availability preferences.avatarSeed')
       .lean();
     const byId = new Map(users.map((u) => [u._id, u]));
     const counts = await Participant.aggregate([{ $match: { userId: { $in: rows.map((r) => r.userId) }, state: 'completed' } }, { $group: { _id: '$userId', n: { $sum: 1 } } }]);

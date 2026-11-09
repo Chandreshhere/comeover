@@ -7,11 +7,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText, Button, Mascot } from '@/components';
 import { colors, layout, radius, space } from '@/theme/tokens';
 import { durations, spring } from '@/theme/motion';
+import sfx from '@/services/sfx';
 
-const DOT_COLORS = [colors.ink, colors.orange, colors.white, colors.pink, colors.mint];
-const DOTS = Array.from({ length: 14 }, (_, i) => ({ angle: (i / 14) * Math.PI * 2, dist: 110 + (i % 3) * 30, size: 8 + (i % 3) * 3, color: DOT_COLORS[i % DOT_COLORS.length] }));
+// Confetti geometry only — colours are read from the live palette at render.
+const dotColors = () => [colors.ink, colors.orange, colors.pureWhite, colors.pink, colors.mint];
+const DOTS = Array.from({ length: 14 }, (_, i) => ({ angle: (i / 14) * Math.PI * 2, dist: 110 + (i % 3) * 30, size: 8 + (i % 3) * 3 }));
 
-function Dot({ d, play }) {
+function Dot({ d, color, play }) {
   const p = useSharedValue(0);
   useEffect(() => {
     if (play) p.value = withTiming(1, { duration: durations.celebration, easing: Easing.out(Easing.cubic) });
@@ -20,7 +22,7 @@ function Dot({ d, play }) {
     opacity: 1 - p.value * 0.9,
     transform: [{ translateX: Math.cos(d.angle) * d.dist * p.value }, { translateY: Math.sin(d.angle) * d.dist * p.value }, { scale: 0.6 + p.value * 0.6 }],
   }));
-  return <Animated.View style={[{ position: 'absolute', width: d.size, height: d.size, borderRadius: d.size / 2, backgroundColor: d.color }, a]} />;
+  return <Animated.View style={[{ position: 'absolute', width: d.size, height: d.size, borderRadius: d.size / 2, backgroundColor: color }, a]} />;
 }
 
 export default function LevelUpOverlay({ visible, level, onClose }) {
@@ -31,6 +33,7 @@ export default function LevelUpOverlay({ visible, level, onClose }) {
 
   useEffect(() => {
     if (!visible) return;
+    sfx.play('chime');
     setKey(Date.now());
     if (!reduce) {
       badge.value = 0.4;
@@ -41,33 +44,30 @@ export default function LevelUpOverlay({ visible, level, onClose }) {
   const badgeStyle = useAnimatedStyle(() => ({ transform: [{ scale: badge.value }] }));
 
   if (!level) return null;
+  const palette = dotColors();
   return (
     <Modal visible={visible} animationType={reduce ? 'none' : 'fade'} onRequestClose={onClose} statusBarTranslucent>
       <View style={{ flex: 1, backgroundColor: colors.periwinkle, paddingTop: insets.top + space.md, paddingBottom: insets.bottom + space.lg, paddingHorizontal: layout.screenPadding }} accessibilityViewIsModal>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Button title="Skip" variant="ghost" size="sm" full={false} onPress={onClose} accessibilityLabel="Skip celebration" />
-        </View>
+        <Button title="Skip" variant="ghost" size="sm" full={false} align="end" onPress={onClose} accessibilityLabel="Skip celebration" />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-            {!reduce && DOTS.map((d, i) => <Dot key={i} d={d} play={!!key} />)}
-            <Mascot size={210} mood="celebrate" celebrateKey={key} />
+            {!reduce && DOTS.map((d, i) => <Dot key={i} d={d} color={palette[i % palette.length]} play={!!key} />)}
+            <Mascot size={190} mood="celebrate" celebrateKey={key} />
           </View>
-          <Animated.View style={[{ marginTop: space.lg, width: 88, height: 88, borderRadius: 44, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center', borderWidth: 4, borderColor: colors.white }, badgeStyle]}>
-            <AppText variant="display" color={colors.white}>
-              {level.level}
+          <Animated.View style={[{ marginTop: space.lg, backgroundColor: colors.ink, borderRadius: radius.pill, paddingHorizontal: space.md, paddingVertical: space.xxs }, badgeStyle]}>
+            <AppText variant="label" color={colors.white}>
+              Level {level.level}
             </AppText>
           </Animated.View>
-          <AppText variant="display" align="center" style={{ marginTop: space.md }} accessibilityRole="header" accessibilityLiveRegion="polite">
+          <AppText variant="display" align="center" style={{ marginTop: space.sm }} accessibilityRole="header" accessibilityLiveRegion="polite">
             Level up!
           </AppText>
-          <AppText variant="h2" align="center">
-            You're now a {level.name}
+          <AppText variant="h3" align="center" style={{ marginTop: space.xxs }}>
+            You've reached {level.name}
           </AppText>
-          <View style={{ backgroundColor: colors.glass, borderRadius: radius.card, padding: space.md, marginTop: space.lg, maxWidth: 340 }}>
-            <AppText align="center" color={colors.inkSoft}>
-              Earned through real meetups — not screen time. A new stop on your roadmap is unlocked.
-            </AppText>
-          </View>
+          <AppText align="center" color={colors.inkSoft} style={{ marginTop: space.xs, maxWidth: 300 }}>
+            Earned through real meetups.
+          </AppText>
         </View>
         <Button title="Keep going" onPress={onClose} />
       </View>

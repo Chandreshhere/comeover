@@ -14,6 +14,7 @@ const { enforce } = require('../lib/rateLimit');
 const { pageParams, pageOf } = require('../lib/page');
 const P = require('../lib/present');
 const S = require('../services/progress');
+const { SOCIAL_STYLES } = require('../lib/socialMatch');
 
 const DEFAULT_CITY = () => process.env.DEFAULT_CITY || 'Ahmedabad';
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -34,6 +35,7 @@ const PROFILE_FIELDS = {
   languages: { type: 'array', max: 8, items: { type: 'string', max: 30 } },
   avatarSeed: { type: 'string', max: 40 }, // illustrated-avatar choice when no photo is uploaded
   availabilityWindows: { type: 'array', max: 8, unique: true, items: { type: 'string', max: 30 } },
+  socialStyle: { type: 'string', enum: SOCIAL_STYLES, nullable: true }, // null clears it
   ageConfirmed: { type: 'boolean' },
   termsAccepted: { type: 'boolean' },
   onboardingCompleted: { type: 'boolean' },
@@ -41,8 +43,8 @@ const PROFILE_FIELDS = {
 
 // Profile fields that require (or create) a profile. Flag-only patches (age gate,
 // terms) arrive before profile setup during onboarding and must not require a name.
-const PROFILE_KEYS = ['avatarKey', 'bio', 'city', 'area', 'interests', 'intents', 'visibility', 'boundaries', 'languages', 'pronouns', 'avatarSeed', 'availabilityWindows', 'onboardingCompleted'];
-const PROFILE_MAP = { avatarKey: 'avatarKey', bio: 'bio', city: 'homeCity', area: 'homeArea', interests: 'interests', intents: 'intents', visibility: 'visibility', boundaries: 'boundaries', languages: 'languages' };
+const PROFILE_KEYS = ['avatarKey', 'bio', 'city', 'area', 'interests', 'intents', 'visibility', 'boundaries', 'languages', 'pronouns', 'avatarSeed', 'availabilityWindows', 'socialStyle', 'onboardingCompleted'];
+const PROFILE_MAP = { avatarKey: 'avatarKey', bio: 'bio', city: 'homeCity', area: 'homeArea', interests: 'interests', intents: 'intents', visibility: 'visibility', boundaries: 'boundaries', languages: 'languages', socialStyle: 'socialStyle' };
 
 function availabilityOut(av) {
   const a = av || {};
@@ -98,6 +100,7 @@ async function loadMe(userId) {
             avatarSeed: prefs.avatarSeed || null,
             availabilityWindows: prefs.availabilityWindows || [],
             languages: p.languages || [],
+            socialStyle: p.socialStyle || null,
             reliability: P.publicReliability(p.reliabilityScore == null ? 1 : p.reliabilityScore),
           }
         : null,
@@ -239,6 +242,7 @@ const routes = {
           visibility: v.visibility || 'discoverable',
           boundaries: v.boundaries || null,
           languages: v.languages || [],
+          socialStyle: v.socialStyle || null,
           reliabilityScore: 1,
           preferences: {},
           createdAt: now,
@@ -427,7 +431,7 @@ const routes = {
     const strip = ({ _id, ...rest }) => ({ id: _id, ...rest });
     const exportDoc = {
       generatedAt: new Date().toISOString(),
-      notice: 'Your Project IRL data. Other people’s personal data is excluded. Reports filed about you are not included to protect reporters.',
+      notice: 'Your Come Over data. Other people’s personal data is excluded. Reports filed about you are not included to protect reporters.',
       account: me,
       plans: parts
         .filter((p) => actById.has(p.activityId))

@@ -1,4 +1,4 @@
-// REST client for the Project IRL API (Node + MongoDB, base path /v1).
+// REST client for the Come Over API (Node + MongoDB, base path /v1).
 // - API access token (JWT) as Bearer; one transparent refresh + retry on 401.
 // - Idempotency-Key on every mutating request (join, expense, payments).
 // - Typed ApiError with server `code` so screens can branch on it.

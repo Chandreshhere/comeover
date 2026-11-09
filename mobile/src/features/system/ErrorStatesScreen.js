@@ -2,10 +2,11 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, Linking, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Button, Card, ErrorState, Icon, Screen, ScreenHeader, Skeleton, Tag } from '@/components';
+import { AppText, Button, Card, ErrorState, Screen, ScreenHeader, Skeleton, Tag } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import { colors, space } from '@/theme/tokens';
 import { timeLabel } from '@/utils/format';
+import IconBubble from './IconBubble';
 
 // Retry performs a real round-trip (GET /me/bootstrap) so QA can verify
 // connectivity / service status from this screen.
@@ -23,7 +24,7 @@ function RetryableState({ kind, title, body, secondary, onSecondary, retryLabel,
     try {
       await useAppStore.getState().bootstrap();
       const st = useAppStore.getState().service?.status;
-      setResult(st === 'maintenance' ? 'Server reachable — maintenance is on.' : 'Server reachable — all good.');
+      setResult(st === 'maintenance' ? 'Server reachable. Maintenance is on.' : 'Server reachable. All good.');
     } catch (e) {
       setResult(e.code === 'network' || e.code === 'timeout' ? 'Still offline.' : e.message || 'Request failed.');
     } finally {
@@ -58,16 +59,14 @@ function DeletionPending({ onManage }) {
   const date = new Date(Date.now() + 30 * 864e5);
   return (
     <View style={{ alignItems: 'center', paddingVertical: space.xxl, paddingHorizontal: space.md }}>
-      <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: colors.surfaceSubtle, alignItems: 'center', justifyContent: 'center', marginBottom: space.md }}>
-        <Icon name="user-x" size={28} />
-      </View>
+      <IconBubble icon="user-x" tone="pink" size={72} iconSize={34} style={{ marginBottom: space.md }} />
       <AppText variant="h2" align="center">
-        Account deletion scheduled
+        Deletion scheduled
       </AppText>
       <AppText color={colors.muted} align="center" style={{ marginTop: space.xs, maxWidth: 300 }}>
-        Your account will be deleted on {date.getDate()}/{date.getMonth() + 1}/{date.getFullYear()}. Until then your profile is hidden. Signing back in before then cancels it.
+        Deletes on {date.getDate()}/{date.getMonth() + 1}/{date.getFullYear()}. Sign back in before then to cancel.
       </AppText>
-      <Button title="Account settings" full={false} variant="secondary" style={{ marginTop: space.lg }} onPress={onManage} />
+      <Button title="Account settings" full={false} align="center" variant="secondary" style={{ marginTop: space.lg }} onPress={onManage} />
     </View>
   );
 }
@@ -107,11 +106,11 @@ export default function ErrorStatesScreen() {
   return (
     <Screen header={<ScreenHeader title="Error states" subtitle="QA gallery" />}>
       <AppText variant="caption" color={colors.muted} style={{ marginTop: space.xs }}>
-        Each state explains what happened in plain words and offers a retry or a way around it.
+        Each state says what happened and how to recover.
       </AppText>
 
       <Card style={{ marginTop: space.md }}>
-        <Tag label="Loading skeleton" bg={colors.periwinkleWash} />
+        <Tag label="Loading skeleton" bg={colors.periwinkleWash} fg={colors.ink} />
         <View style={{ flexDirection: 'row', marginTop: space.md }}>
           <Skeleton width={56} height={56} r={18} />
           <View style={{ flex: 1, marginLeft: space.sm, justifyContent: 'center' }}>
@@ -119,15 +118,12 @@ export default function ErrorStatesScreen() {
             <Skeleton width="45%" height={10} style={{ marginTop: 8 }} />
           </View>
         </View>
-        <AppText variant="caption" color={colors.muted} style={{ marginTop: space.sm }}>
-          Pulses gently; static when Reduce Motion is on.
-        </AppText>
       </Card>
 
       <View style={{ gap: space.md, marginTop: space.md }}>
         {STATES.map((s) => (
           <Card key={s.key} padding={space.sm}>
-            <Tag label={s.tag} bg={colors.periwinkleWash} style={{ margin: space.xs }} />
+            <Tag label={s.tag} bg={colors.periwinkleWash} fg={colors.ink} style={{ margin: space.xs }} />
             {s.el}
           </Card>
         ))}

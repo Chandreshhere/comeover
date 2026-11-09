@@ -48,8 +48,10 @@ export function durationLabel(minutes) {
 }
 
 export function inr(minor) {
-  const rupees = (minor || 0) / 100;
-  return `₹${rupees.toLocaleString('en-IN', { maximumFractionDigits: rupees % 1 ? 2 : 0 })}`;
+  const m = Math.round(Number(minor) || 0);
+  const rupees = m / 100;
+  const digits = m % 100 ? 2 : 0; // ₹333.30, never ₹333.3
+  return `₹${rupees.toLocaleString('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 }
 
 export function greeting(now = new Date()) {

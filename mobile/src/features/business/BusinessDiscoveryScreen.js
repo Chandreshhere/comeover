@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
-import { ActivityCard, AppText, Card, Chip, ChipRow, HeroCard, Icon, MascotArt, Pictogram, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
+import { ActivityCard, AppText, Chip, ChipRow, IconButton, ListGroup, ListRow, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
 import { colors, layout, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
 import { categories } from '@/data/catalog';
@@ -43,22 +43,16 @@ export default function BusinessDiscoveryScreen() {
 
   return (
     <Screen
-      header={<ScreenHeader title="Partner places" right={<Icon name="briefcase" size={20} />} />}
+      header={
+        <ScreenHeader
+          title="Partner places"
+          subtitle="Verified spots with group perks"
+          right={<IconButton icon="bar-chart-2" accessibilityLabel="Open business dashboard" onPress={() => nav.navigate('business_analytics')} />}
+        />
+      }
       refreshControl={<RefreshControl refreshing={venuesQ.refreshing} onRefresh={venuesQ.reload} tintColor={colors.ink} />}
     >
-      <Animated.View entering={enter(0)}>
-        <HeroCard style={{ marginTop: space.xs, flexDirection: 'row', alignItems: 'center' }}>
-          <View style={{ flex: 1 }}>
-            <AppText variant="h2">Places that love plans</AppText>
-            <AppText color={colors.inkSoft} style={{ marginTop: 4 }}>
-              Verified cafés, courts and clubs with perks for IRL groups. Paid placements are always labelled.
-            </AppText>
-          </View>
-          <MascotArt size={96} pose="wave" showMotionLines={false} />
-        </HeroCard>
-      </Animated.View>
-
-      <View style={{ marginHorizontal: -layout.screenPadding, marginTop: space.md }}>
+      <View style={{ marginHorizontal: -layout.screenPadding, marginTop: space.xs }}>
         <ChipRow>
           <Chip label="All" icon="grid" selected={!category} onPress={() => setCategory(null)} />
           {categories.map((c) => (
@@ -70,10 +64,10 @@ export default function BusinessDiscoveryScreen() {
       {sponsoredPlans.length > 0 && (
         <>
           <SectionHeader title="Sponsored plans" />
-          <View style={{ gap: space.sm }}>
+          <View style={{ gap: space.md }}>
             {sponsoredPlans.map(({ a, venue }, i) => (
-              <Animated.View key={a.id} entering={enter(i + 1)}>
-                <SponsoredLabel onWhy={() => setWhy(venue)} style={{ marginBottom: 6 }} />
+              <Animated.View key={a.id} entering={enter(i)}>
+                <SponsoredLabel onWhy={() => setWhy(venue)} style={{ marginBottom: space.xs }} />
                 <ActivityCard activity={a} variant="row" index={i} onPress={() => nav.navigate('activity_detail', { id: a.id })} style={{ borderWidth: 1.2, borderColor: colors.border }} />
               </Animated.View>
             ))}
@@ -81,19 +75,23 @@ export default function BusinessDiscoveryScreen() {
         </>
       )}
 
-      <SectionHeader title={venuesQ.status === 'ready' ? `Partner places · ${venues.length}` : 'Partner places'} />
+      <SectionHeader title={venuesQ.status === 'ready' && venues.length ? `Places · ${venues.length}` : 'Places'} />
       <QueryState
         status={venuesQ.status}
         error={venuesQ.error}
         hasData={venues.length > 0}
         onRetry={venuesQ.reload}
         skeletonRows={3}
-        skeletonHeight={130}
-        empty={{ title: 'No partners here yet', body: category ? 'Try another category, or suggest a great spot to its owner.' : 'Know a great spot? Suggest it to the venue owner.' }}
+        skeletonHeight={96}
+        empty={
+          category
+            ? { title: 'No partners here yet', body: 'Try another category.', cta: 'Show all', onCta: () => setCategory(null) }
+            : { title: 'No partners here yet', body: 'Know a great spot? Tell the owner about us.' }
+        }
       >
         <View style={{ gap: space.sm }}>
           {venues.map((v, i) => (
-            <Animated.View key={v.id} entering={enter(i + 2)}>
+            <Animated.View key={v.id} entering={enter(i + 1)}>
               <VenueCard venue={v} planCount={v.planCount ?? plansForVenue(v, visibleActivities).length} onPress={() => nav.navigate('business_profile', { id: v.id })} onWhy={() => setWhy(v)} />
             </Animated.View>
           ))}
@@ -101,22 +99,12 @@ export default function BusinessDiscoveryScreen() {
       </QueryState>
 
       {/* For venue owners */}
-      <Card onPress={() => nav.navigate('business_onboarding')} bg={colors.ink} style={{ marginTop: space.xl, flexDirection: 'row', alignItems: 'center' }} accessibilityLabel="List your venue or club">
-        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.orange, alignItems: 'center', justifyContent: 'center' }}>
-          <Pictogram name="pin" size={24} />
-        </View>
-        <View style={{ flex: 1, marginLeft: space.sm }}>
-          <AppText variant="bodyStrong" color={colors.white}>
-            Own a venue or run a club?
-          </AppText>
-          <AppText variant="caption" color="rgba(255,255,255,0.7)">
-            Get verified and reach people planning nearby
-          </AppText>
-        </View>
-        <Icon name="arrow-right" color={colors.white} />
-      </Card>
-      <AppText variant="label" color={colors.deep} align="center" style={{ marginTop: space.md }} onPress={() => nav.navigate('business_analytics')} accessibilityRole="button" suppressHighlighting>
-        Already a partner? Open business dashboard
+      <SectionHeader title="For owners" />
+      <ListGroup>
+        <ListRow icon="briefcase" iconBg={colors.orangeSoft} title="List your venue or club" subtitle="Get verified and reach people nearby" onPress={() => nav.navigate('business_onboarding')} last />
+      </ListGroup>
+      <AppText variant="caption" color={colors.muted} align="center" style={{ marginTop: space.md }}>
+        Paid placements are always labelled “Sponsored”.
       </AppText>
 
       <SponsoredSheet

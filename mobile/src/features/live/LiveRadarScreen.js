@@ -1,39 +1,149 @@
 // live_radar (tab) — what's happening around you right now.
 // Shows plans (GET /activities feed) and people's *intent* from
 // GET /availability/nearby (activity + coarse distance band only).
+// Layout, top to bottom: header (+ Map), my status row, the radar with its
+// distance filter, then the people and plans lists. Pull to refresh (or tap
+// the "updated" line) re-queries both.
 import React, { useMemo, useState } from 'react';
-import { RefreshControl, Switch, View, useWindowDimensions } from 'react-native';
+import { Pressable, RefreshControl, View, useWindowDimensions } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
 import {
   ActivityCard,
+  ActivityCardSkeleton,
   AppText,
-  Avatar,
   Button,
-  Card,
-  Chip,
-  HeroCard,
   Icon,
   IconButton,
-  QueryState,
   Screen,
   SectionHeader,
   Segmented,
-  Skeleton,
-  Tag,
 } from '@/components';
 import { categoryBySlug } from '@/data/catalog';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
 import { colors, layout, radius, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
-import { coarseDistance, timeLabel } from '@/utils/format';
+import { timeLabel } from '@/utils/format';
 import haptics from '@/utils/haptics';
+import { SOCIAL_STYLES, rankPeople } from '@/utils/socialMatch';
 import { joinUiState, sortActivities, visibleActivities } from '@/features/discover/utils';
 import useJoinAction from '@/features/plans/joinActions';
-import Radar, { BANDS, bandFor } from './components/Radar';
+import Radar, { BANDS, bandFor, radarColors } from './components/Radar';
+import StatusCard from './components/StatusCard';
+import PersonCard, { PersonCardSkeleton } from './components/PersonCard';
+import LiveDot from './components/LiveDot';
 
 const SOON_MS = 3 * 3600000;
+const RADAR_PLANS = 12;
+const RADAR_PEOPLE = 8;
+const RADAR_MAX = 360;
+
+const BAND_OPTIONS = [{ value: 'all', label: 'All' }, ...BANDS.map((b) => ({ value: b.id, label: b.label }))];
+
+// Key for the radar: one line, then the one privacy fact that matters here.
+function LegendItem({ label, children }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      {children}
+      <AppText variant="caption" color={colors.inkSoft} style={{ marginLeft: 6 }}>
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
+const DOT = 10;
+const dot = { width: DOT, height: DOT, borderRadius: DOT / 2 };
+
+function Legend() {
+  const rc = radarColors();
+  return (
+    <View style={{ marginTop: space.sm, alignItems: 'center' }}>
+      <View
+        accessible
+        accessibilityLabel="Key: green ring, free now. Pink ring, free later. Bubbles are plans, orange ones start within 30 minutes."
+        style={{ flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', columnGap: space.md, rowGap: space.xxs }}
+      >
+        <LegendItem label="Free now">
+          <View style={[dot, { borderWidth: 2, borderColor: rc.now }]} />
+        </LegendItem>
+        <LegendItem label="Free later">
+          <View style={[dot, { borderWidth: 2, borderColor: rc.later }]} />
+        </LegendItem>
+        <LegendItem label="Plans">
+          {/* half orange (starts soon), half periwinkle (later) */}
+          <View style={[dot, { flexDirection: 'row', overflow: 'hidden' }]}>
+            <View style={{ flex: 1, backgroundColor: rc.planSoon.stroke }} />
+            <View style={{ flex: 1, backgroundColor: rc.planLater.stroke }} />
+          </View>
+        </LegendItem>
+      </View>
+      <AppText variant="caption" color={colors.muted} align="center" style={{ marginTop: space.xxs }}>
+        Rough distance only · directions scrambled
+      </AppText>
+    </View>
+  );
+}
+
+// Inline problem banner (offline refresh, a list that failed to load).
+function Notice({ text, onRetry, style }) {
+  return (
+    <View
+      style={[
+        {
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: colors.orangeSoft,
+          borderRadius: radius.quest,
+          paddingLeft: space.sm,
+          paddingRight: space.xxs,
+          minHeight: 48,
+        },
+        style,
+      ]}
+      accessibilityLiveRegion="polite"
+    >
+      <Icon name="wifi-off" size={16} color={colors.ink} />
+      <AppText variant="caption" style={{ flex: 1, marginHorizontal: space.xs }}>
+        {text}
+      </AppText>
+      <Button title="Retry" size="xs" variant="ghost" full={false} onPress={onRetry} />
+    </View>
+  );
+}
+
+// Empty list: one friendly line + one centred action.
+function EmptyLine({ text, cta, onPress }) {
+  return (
+    <View
+      style={{
+        alignItems: 'center',
+        backgroundColor: colors.surface,
+        borderRadius: radius.card,
+        paddingVertical: space.lg,
+        paddingHorizontal: space.md,
+      }}
+    >
+      <AppText color={colors.muted} align="center">
+        {text}
+      </AppText>
+      {!!cta && (
+        <Button
+          title={cta}
+          size="sm"
+          variant="secondary"
+          full={false}
+          align="center"
+          onPress={onPress}
+          style={{ marginTop: space.sm }}
+        />
+      )}
+    </View>
+  );
+}
+
+const loadingFirst = (status, hasData) => !hasData && (status === 'idle' || status === 'loading');
 
 export default function LiveRadarScreen() {
   const nav = useNavigation();
@@ -45,17 +155,17 @@ export default function LiveRadarScreen() {
   const joinStates = useAppStore((s) => s.joinStates);
   const blocked = useAppStore((s) => s.blocked);
   const availability = useAppStore((s) => s.availability);
-  const setAvailability = useAppStore((s) => s.setAvailability);
   const showOnRadar = useAppStore((s) => s.prefs.showOnRadar);
-  const setPrefs = useAppStore((s) => s.setPrefs);
   const area = useAppStore((s) => s.profile.area);
+  // Optional: older profiles (and servers) may not carry a social style yet.
+  const myStyle = useAppStore((s) => s.profile.socialStyle);
   const join = useJoinAction();
 
   const feed = useLoader('feed', (s) => s.loadFeed());
   const ppl = useLoader('nearbyPeople', (s) => s.loadNearbyPeople());
 
-  const [mode, setMode] = useState('radar');
   const [band, setBand] = useState('all');
+  const [selectedId, setSelectedId] = useState(null);
   const [pulseKey, setPulseKey] = useState(1);
   const [updatedAt, setUpdatedAt] = useState(() => new Date());
   const [refreshing, setRefreshing] = useState(false);
@@ -63,23 +173,44 @@ export default function LiveRadarScreen() {
 
   const byId = useMemo(() => new Map(activities.map((a) => [a.id, a])), [activities]);
   // `updatedAt` is a dependency on purpose: "starting soon" is time-based.
-  const soon = useMemo(() => {
+  const soonAll = useMemo(() => {
     const now = updatedAt.getTime();
-    const ok = (m) => band === 'all' || bandFor(m).id === band;
     const feedList = feedIds.map((id) => byId.get(id)).filter(Boolean);
     return sortActivities(
-      visibleActivities(feedList, { blocked, now }).filter((a) => new Date(a.startsAt).getTime() - now < SOON_MS && ok(a.distanceM)),
+      visibleActivities(feedList, { blocked, now }).filter((a) => new Date(a.startsAt).getTime() - now < SOON_MS),
       'soonest'
     );
-  }, [feedIds, byId, blocked, band, updatedAt]);
-  const intents = useMemo(() => {
-    const ok = (m) => band === 'all' || bandFor(m).id === band;
-    return nearbyPeopleIds
+  }, [feedIds, byId, blocked, updatedAt]);
+  // Free now before free later, then nearest; best social-energy matches first
+  // when both sides picked a style (stable, so the order above is kept).
+  const intentsAll = useMemo(() => {
+    const list = nearbyPeopleIds
       .map((id) => users[id])
-      .filter((p) => p && p.availability !== 'busy' && !blocked.includes(p.id) && ok(p.distanceM))
-      .sort((a, b) => (a.availability === 'now' ? 0 : 1) - (b.availability === 'now' ? 0 : 1) || (a.distanceM ?? 1e9) - (b.distanceM ?? 1e9));
-  }, [nearbyPeopleIds, users, blocked, band]);
-  const plansByCat = useMemo(() => soon.reduce((m, a) => ({ ...m, [a.category]: (m[a.category] || 0) + 1 }), {}), [soon]);
+      .filter((p) => p && p.availability !== 'busy' && !blocked.includes(p.id))
+      .sort(
+        (a, b) =>
+          (a.availability === 'now' ? 0 : 1) - (b.availability === 'now' ? 0 : 1) ||
+          (a.distanceM ?? 1e9) - (b.distanceM ?? 1e9)
+      );
+    return rankPeople(list, myStyle);
+  }, [nearbyPeopleIds, users, blocked, myStyle]);
+
+  const soon = useMemo(
+    () => (band === 'all' ? soonAll : soonAll.filter((a) => bandFor(a.distanceM).id === band)),
+    [soonAll, band]
+  );
+  const intents = useMemo(
+    () => (band === 'all' ? intentsAll : intentsAll.filter((p) => bandFor(p.distanceM).id === band)),
+    [intentsAll, band]
+  );
+  // Only people with a (server-coarsened) distance go on the scope.
+  const radarPeople = useMemo(() => intents.filter((p) => p.distanceM != null).slice(0, RADAR_PEOPLE), [intents]);
+  const radarPlans = useMemo(() => soon.slice(0, RADAR_PLANS), [soon]);
+  const plansByCat = useMemo(
+    () => soon.reduce((m, a) => ({ ...m, [a.category]: (m[a.category] || 0) + 1 }), {}),
+    [soon]
+  );
+  const selected = selectedId ? intents.find((p) => p.id === selectedId) : null;
 
   // Re-query plans + nearby availability; one radar pulse per successful refresh.
   const refresh = async () => {
@@ -91,7 +222,11 @@ export default function LiveRadarScreen() {
     const failed = results.find((r) => r.status === 'rejected');
     if (failed) {
       const e = failed.reason;
-      setRefreshError(e?.code === 'network' || e?.code === 'timeout' ? 'You’re offline — showing the last results.' : e?.message || 'Couldn’t refresh.');
+      setRefreshError(
+        e?.code === 'network' || e?.code === 'timeout'
+          ? 'You’re offline. Showing the last results.'
+          : e?.message || 'Couldn’t refresh.'
+      );
     } else {
       setPulseKey((k) => k + 1);
     }
@@ -99,195 +234,213 @@ export default function LiveRadarScreen() {
     setRefreshing(false);
   };
 
-  const available = availability.status !== 'busy';
-  const visibleToOthers = available && showOnRadar;
-  const radarSize = Math.min(width - layout.screenPadding * 2 - 36, 360);
+  const openPlan = (a) => nav.navigate('activity_detail', { id: a.id });
+  const seePlans = (p) => nav.navigate('category_results', { category: p.intent });
+  const startFor = (p) =>
+    nav.navigate('create_activity_type', { category: categoryBySlug[p.intent] ? p.intent : undefined });
+  const togglePerson = (p) => {
+    haptics.select();
+    setSelectedId((id) => (id === p.id ? null : p.id));
+  };
+  const showAll = () => setBand('all');
+
+  const radarSize = Math.min(width - layout.screenPadding * 2, RADAR_MAX);
+  const available = availability.status === 'now' || availability.status === 'later';
+  const showStyleHint = SOCIAL_STYLES.includes(myStyle) && intents.some((p) => SOCIAL_STYLES.includes(p.socialStyle));
+  const updated = `${area ? `Around ${area}` : 'Near you'} · updated ${timeLabel(updatedAt)}`;
+
+  // People list body: skeletons → error → empty line → cards.
+  let people;
+  if (loadingFirst(ppl.status, intents.length > 0)) {
+    people = (
+      <View style={{ gap: space.sm }}>
+        <PersonCardSkeleton />
+        <PersonCardSkeleton />
+      </View>
+    );
+  } else if (!intents.length && ppl.status === 'error') {
+    people = <Notice text={ppl.error || 'Couldn’t load people nearby.'} onRetry={ppl.reload} />;
+  } else if (!intents.length) {
+    people =
+      band !== 'all' ? (
+        <EmptyLine text="No one free in this range." cta="Show all distances" onPress={showAll} />
+      ) : available ? (
+        <EmptyLine text="No one else nearby is free yet." />
+      ) : (
+        <EmptyLine
+          text="No one nearby is free right now."
+          cta="Go available"
+          onPress={() => nav.navigate('availability_setup')}
+        />
+      );
+  } else {
+    people = (
+      <View style={{ gap: space.sm }}>
+        {intents.map((p, i) => (
+          <Animated.View key={p.id} entering={enter(i)}>
+            <PersonCard
+              person={p}
+              myStyle={myStyle}
+              matching={plansByCat[p.intent] || 0}
+              onSeePlans={() => seePlans(p)}
+              onStart={() => startFor(p)}
+            />
+          </Animated.View>
+        ))}
+      </View>
+    );
+  }
+
+  // Plans list body, same states.
+  let plans;
+  if (loadingFirst(feed.status, feedIds.length > 0)) {
+    plans = (
+      <View style={{ gap: space.sm }}>
+        <ActivityCardSkeleton />
+        <ActivityCardSkeleton />
+      </View>
+    );
+  } else if (!feedIds.length && feed.status === 'error') {
+    plans = <Notice text={feed.error || 'Couldn’t load plans.'} onRetry={feed.reload} />;
+  } else if (!soon.length) {
+    plans =
+      band !== 'all' ? (
+        <EmptyLine text="No plans in this range soon." cta="Show all distances" onPress={showAll} />
+      ) : (
+        <EmptyLine
+          text="Nothing starting in the next 3 hours."
+          cta="Start something"
+          onPress={() => nav.navigate('create_activity_type')}
+        />
+      );
+  } else {
+    plans = (
+      <View style={{ gap: space.sm }}>
+        {soon.map((a, i) => (
+          <ActivityCard
+            key={a.id}
+            activity={a}
+            index={i}
+            variant="row"
+            joinState={joinUiState(joinStates[a.id])}
+            onPress={() => openPlan(a)}
+            onJoin={() => join(a)}
+          />
+        ))}
+      </View>
+    );
+  }
 
   return (
-    <Screen bg={colors.canvas} tabBarSpace refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.ink} />}>
-      {/* Header */}
+    <Screen
+      bg={colors.canvas}
+      tabBarSpace
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={refresh}
+          tintColor={colors.ink}
+          colors={[colors.ink]}
+          progressBackgroundColor={colors.surface}
+        />
+      }
+    >
+      {/* Header: title, area + freshness (tap to refresh), Map */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm }}>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, marginRight: space.sm }}>
           <AppText variant="h1" accessibilityRole="header">
             Live now
           </AppText>
-          <AppText variant="caption" color={colors.muted}>
-            Around {area} · updated {timeLabel(updatedAt)}
-          </AppText>
+          <Pressable
+            onPress={refresh}
+            disabled={refreshing}
+            accessibilityRole="button"
+            accessibilityLabel={`${updated}. Refresh`}
+            hitSlop={{ top: 15, bottom: 15 }}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              alignSelf: 'flex-start',
+              maxWidth: '100%',
+              marginTop: 2,
+              opacity: pressed ? 0.6 : 1,
+            })}
+          >
+            <LiveDot />
+            <AppText
+              variant="caption"
+              color={colors.muted}
+              numberOfLines={1}
+              style={{ flexShrink: 1, marginLeft: space.xs }}
+            >
+              {updated}
+            </AppText>
+          </Pressable>
         </View>
-        <IconButton icon="refresh-cw" accessibilityLabel="Refresh live plans" onPress={refresh} style={{ marginRight: space.xs }} />
         <IconButton icon="map" accessibilityLabel="Open map" onPress={() => nav.navigate('map_discovery')} />
       </View>
-      {!!refreshError && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.orangeSoft, borderRadius: radius.quest, padding: space.sm, marginTop: space.sm }} accessibilityLiveRegion="polite">
-          <Icon name="wifi-off" size={15} />
-          <AppText variant="caption" style={{ flex: 1, marginLeft: 6 }}>
-            {refreshError}
-          </AppText>
-          <AppText variant="label" color={colors.deep} onPress={refresh} accessibilityRole="button">
-            Retry
-          </AppText>
-        </View>
-      )}
 
-      {/* My availability */}
-      <Animated.View entering={enter(0)}>
-        <Card bg={available ? colors.mint : colors.surface} style={{ marginTop: space.md }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: available ? colors.success : colors.muted }} />
-            <View style={{ flex: 1, marginLeft: space.sm }}>
-              <AppText variant="bodyStrong">{availability.status === 'now' ? 'You’re available now' : availability.status === 'later' ? 'Available later today' : 'You’re set to busy'}</AppText>
-              <AppText variant="caption" color={colors.inkSoft} numberOfLines={2}>
-                {available
-                  ? availability.activities?.length
-                    ? `Up for ${availability.activities.map((s) => categoryBySlug[s]?.short.toLowerCase()).filter(Boolean).join(', ')}`
-                    : 'Open to anything nearby'
-                  : 'Go available so nearby plans can find you'}
-              </AppText>
-            </View>
-            <Switch
-              value={available}
-              onValueChange={(v) => (v ? nav.navigate('availability_setup') : setAvailability({ status: 'busy', until: null }).catch(() => {}) /* store rolls the switch back */)}
-              trackColor={{ false: colors.track, true: colors.ink }}
-              thumbColor={colors.white}
-              accessibilityLabel="Available now"
-            />
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm, paddingTop: space.sm, borderTopWidth: 1, borderTopColor: 'rgba(9,10,14,0.08)' }}>
-            <Icon name={visibleToOthers ? 'eye' : 'eye-off'} size={15} color={colors.inkSoft} />
-            <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: 6 }}>
-              {visibleToOthers ? 'Others see your intent and a ~1 km area — never your exact location.' : 'You’re hidden from the radar.'}
-            </AppText>
-            <Switch value={showOnRadar} onValueChange={(v) => setPrefs({ showOnRadar: v })} trackColor={{ false: colors.track, true: colors.ink }} thumbColor={colors.white} accessibilityLabel="Show me on radar" />
-          </View>
-          {available && (
-            <AppText variant="label" color={colors.deep} style={{ marginTop: space.xs }} onPress={() => nav.navigate('availability_setup')} accessibilityRole="button">
-              Edit availability
-            </AppText>
-          )}
-        </Card>
+      {!!refreshError && <Notice text={refreshError} onRetry={refresh} style={{ marginTop: space.sm }} />}
+
+      {/* My availability: one row, opens availability_setup */}
+      <Animated.View entering={enter(0)} style={{ marginTop: space.md }}>
+        <StatusCard
+          availability={availability}
+          showOnRadar={showOnRadar}
+          onPress={() => nav.navigate('availability_setup')}
+        />
       </Animated.View>
 
-      {/* Mode + band filters */}
-      <Segmented
-        options={[{ value: 'radar', label: 'Radar' }, { value: 'list', label: 'List' }, { value: 'map', label: 'Map' }]}
-        value={mode}
-        onChange={(v) => (v === 'map' ? nav.navigate('map_discovery') : setMode(v))}
-        style={{ marginTop: space.lg }}
-      />
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs, marginTop: space.sm }}>
-        <Chip label="All" selected={band === 'all'} onPress={() => setBand('all')} />
-        {BANDS.map((b) => (
-          <Chip key={b.id} label={b.label} selected={band === b.id} onPress={() => setBand(b.id)} />
-        ))}
-      </View>
-
-      {mode === 'radar' && !soon.length && (feed.status === 'idle' || (feed.status === 'loading' && !feedIds.length)) ? (
-        <Skeleton height={radarSize + 80} r={radius.hero} style={{ marginTop: space.md }} />
-      ) : mode === 'radar' && !soon.length && feed.status === 'error' ? (
-        <QueryState status="error" error={feed.error} hasData={false} onRetry={feed.reload} style={{ marginTop: space.md }} />
-      ) : mode === 'radar' ? (
-        <HeroCard style={{ marginTop: space.md, alignItems: 'center' }}>
-          <Radar size={radarSize} items={soon.slice(0, 14)} pulseKey={pulseKey} onPressItem={(a) => nav.navigate('activity_detail', { id: a.id })} />
-          {!soon.length && (
-            <AppText variant="caption" color={colors.inkSoft} align="center" style={{ marginTop: space.xs }}>
-              Nothing starting in the next 3 hours here.{' '}
-              <AppText variant="label" color={colors.deep} onPress={() => nav.navigate('create_activity_type')} accessibilityRole="button">
-                Start something
-              </AppText>
-            </AppText>
-          )}
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm, gap: space.sm }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.orange, borderWidth: 1.5, borderColor: colors.ink }} />
-              <AppText variant="caption" style={{ marginLeft: 4 }}>
-                Starting within 30 min
-              </AppText>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.white, borderWidth: 1.5, borderColor: colors.ink }} />
-              <AppText variant="caption" style={{ marginLeft: 4 }}>
-                Later
-              </AppText>
-            </View>
-          </View>
-          <AppText variant="caption" color={colors.inkSoft} align="center" style={{ marginTop: 6 }}>
-            Plans, not people. Positions show distance bands, not real locations.
-          </AppText>
-        </HeroCard>
-      ) : (
-        <QueryState
-          status={feed.status}
-          error={feed.error}
-          hasData={soon.length > 0}
-          onRetry={feed.reload}
-          style={{ marginTop: space.md }}
-          empty={{ title: 'Quiet in this band', body: 'Try a wider distance, or start something — short plans fill fastest.', cta: 'Create a plan', onCta: () => nav.navigate('create_activity_type') }}
-        >
-          <View style={{ gap: space.sm, marginTop: space.md }}>
-            {soon.map((a, i) => (
-              <ActivityCard
-                key={a.id}
-                activity={a}
-                index={i}
-                variant="row"
-                joinState={joinUiState(joinStates[a.id])}
-                onPress={() => nav.navigate('activity_detail', { id: a.id })}
-                onJoin={() => join(a)}
-              />
-            ))}
-          </View>
-        </QueryState>
-      )}
-
-      {/* Available-now intent cards */}
-      <SectionHeader title={`Up for something${intents.length ? ` · ${intents.length}` : ''}`} />
-      <QueryState
-        status={ppl.status}
-        error={ppl.error}
-        hasData={intents.length > 0}
-        onRetry={ppl.reload}
-        skeletonRows={2}
-        empty={{ title: band === 'all' ? "No one's flagged free here" : 'No one in this band', body: 'Set yourself available — you might be the spark.', cta: 'Go available', onCta: () => nav.navigate('availability_setup') }}
-      >
-        <View style={{ gap: space.xs }}>
-          {intents.map((p, i) => {
-            const cat = categoryBySlug[p.intent];
-            const matching = plansByCat[p.intent] || 0;
-            return (
-              <Animated.View key={p.id} entering={enter(i)}>
-                <Card padding={12} accessibilityLabel={`${p.name} is up for ${cat?.label || 'something'}, ${p.availability === 'now' ? 'now' : 'later today'}${p.distanceM != null ? `, about ${coarseDistance(p.distanceM)} away` : ''}`}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <View>
-                      <Avatar seed={p.id} uri={p.avatarUrl} size={46} />
-                      <View style={{ position: 'absolute', right: -1, bottom: 0, width: 13, height: 13, borderRadius: 7, backgroundColor: p.availability === 'now' ? colors.success : colors.warning, borderWidth: 2, borderColor: colors.white }} />
-                    </View>
-                    <View style={{ flex: 1, marginLeft: space.sm }}>
-                      <AppText variant="bodyStrong">
-                        {p.name} {p.level != null && <AppText variant="caption" color={colors.muted}>· Lvl {p.level}</AppText>}
-                      </AppText>
-                      <AppText variant="caption" color={colors.inkSoft}>
-                        {[cat ? `Up for ${cat.short.toLowerCase()}` : 'Open to anything', p.availability === 'now' ? 'now' : 'later today', p.distanceM != null ? bandFor(p.distanceM).label : p.area].filter(Boolean).join(' · ')}
-                      </AppText>
-                    </View>
-                    {p.reliability != null && <Tag label={`${Math.round(p.reliability * 100)}%`} icon="check-circle" bg={colors.surfaceSubtle} />}
-                  </View>
-                  <View style={{ flexDirection: 'row', gap: space.xs, marginTop: space.sm }}>
-                    {matching > 0 && <Button title={`${matching} matching plan${matching > 1 ? 's' : ''}`} size="xs" variant="secondary" full={false} onPress={() => nav.navigate('category_results', { category: p.intent })} />}
-                    <Button
-                      title={cat ? `Start ${cat.short.toLowerCase()}` : 'Start a plan'}
-                      size="xs"
-                      full={false}
-                      icon="plus"
-                      onPress={() => nav.navigate('create_activity_type', { category: cat ? p.intent : undefined })}
-                    />
-                  </View>
-                </Card>
-              </Animated.View>
-            );
-          })}
+      {/* The radar, with its distance filter */}
+      <Animated.View entering={enter(1)} style={{ marginTop: space.lg }}>
+        <Segmented compact options={BAND_OPTIONS} value={band} onChange={setBand} />
+        <View style={{ alignItems: 'center', marginTop: space.md }}>
+          <Radar
+            size={radarSize}
+            items={radarPlans}
+            people={radarPeople}
+            band={band}
+            pulseKey={pulseKey}
+            onPressItem={openPlan}
+            onPressPerson={togglePerson}
+            selectedPersonId={selected?.id}
+          />
         </View>
-      </QueryState>
+
+        {!!selected && (
+          <Animated.View entering={enter(0)} style={{ marginTop: space.md }}>
+            <PersonCard
+              person={selected}
+              myStyle={myStyle}
+              matching={plansByCat[selected.intent] || 0}
+              onSeePlans={() => seePlans(selected)}
+              onStart={() => startFor(selected)}
+              onClose={() => setSelectedId(null)}
+              bg={colors.periwinkleWash}
+              elevated={false}
+            />
+          </Animated.View>
+        )}
+
+        <Legend />
+      </Animated.View>
+
+      {/* People who flagged themselves free */}
+      <SectionHeader
+        title={`Free nearby${intents.length ? ` · ${intents.length}` : ''}`}
+        right={
+          showStyleHint ? (
+            <AppText variant="caption" color={colors.muted}>
+              Best matches first
+            </AppText>
+          ) : null
+        }
+      />
+      {people}
+
+      {/* Plans starting in the next 3 hours */}
+      <SectionHeader title={`Starting soon${soon.length ? ` · ${soon.length}` : ''}`} />
+      {plans}
     </Screen>
   );
 }

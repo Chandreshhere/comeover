@@ -1,21 +1,22 @@
-// split_settlement — track paid / pending and hand off to a UPI app.
+// split_settlement — the bill, your share (pay via UPI / mark paid) and where
+// everyone stands. One filled action: paying your share.
 // No custody: we open the user's UPI app with a prefilled intent and record
 // what people report. "Marked paid" is a claim until the payer confirms.
 import React, { useMemo, useState } from 'react';
 import { Linking, RefreshControl, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { AppText, Button, Card, EmptyState, HeroCard, Icon, ProgressBar, QueryState, Screen, ScreenHeader, SectionHeader, Sheet, TextField } from '@/components';
-import { colors, radius, space } from '@/theme/tokens';
+import { AppText, Button, Card, EmptyState, HeroCard, Icon, IconButton, ProgressBar, QueryState, Screen, ScreenHeader, SectionHeader, Sheet, TextField } from '@/components';
+import { colors, glass, radius, space } from '@/theme/tokens';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
-import { inr, relativeDay } from '@/utils/format';
+import { relativeDay } from '@/utils/format';
 import haptics from '@/utils/haptics';
-import { METHOD_LABEL, nameOf, settledCount, upiUrl } from './lib/split';
-import { LedgerNote, PersonAvatar, StatusTag } from './components/SplitBits';
+import { METHOD_LABEL, money, nameOf, settledCount, upiUrl } from './lib/split';
+import { Hint, LedgerNote, PersonAvatar, StatusTag, useKnownPeople } from './components/SplitBits';
 
 const shareErrorText = (err, kind) => {
   if (err?.status === 403) return kind === 'confirmed' ? 'Only the person who paid the bill can confirm a payment.' : 'You can only update your own share.';
-  if (err?.status === 0 || err?.code === 'network' || err?.code === 'timeout') return 'No connection — nothing was changed. Try again.';
+  if (err?.status === 0 || err?.code === 'network' || err?.code === 'timeout') return 'No connection, nothing was changed. Try again.';
   return err?.message || 'Couldn’t update the split. Try again.';
 };
 
@@ -32,6 +33,7 @@ export default function SplitSettlementScreen() {
   const expenseL = useLoader(`expense:${expenseId}`, (s) => s.loadExpense(expenseId), [expenseId]);
 
   const e = useMemo(() => expenses.find((x) => x.id === expenseId), [expenses, expenseId]);
+  useKnownPeople(e ? [e.payeeId, ...(e.shares || []).map((sh) => sh.userId)] : []);
   const plan = useMemo(() => (e?.activityId ? activities.find((a) => a.id === e.activityId) : null), [e, activities]);
   const conv = useMemo(() => (e?.activityId ? conversations.find((c) => c.activityId === e.activityId) : null), [e, conversations]);
 
@@ -89,7 +91,7 @@ export default function SplitSettlementScreen() {
     if (!conv) return;
     const pending = e.shares.filter((s) => s.state === 'unsettled' && s.userId !== e.payeeId).map((s) => nameOf(s.userId, 'me'));
     try {
-      await sendMessage(conv.id, `Friendly nudge 🧾 “${e.description}” — ${pending.join(', ')} still to settle. Shares are in SplitMate.`);
+      await sendMessage(conv.id, `Friendly nudge 🧾 “${e.description}”:${pending.join(', ')} still to settle. Shares are in SplitMate.`);
       setNotice('Reminder posted in the plan’s group chat.');
     } catch (err) {
       setActionError('Couldn’t post the reminder. Check your connection and try again.');
@@ -106,30 +108,39 @@ export default function SplitSettlementScreen() {
     const ok =
       sheet.kind === 'paid'
         ? await updateShare(sheet.userId, 'marked_paid', ref.trim() || undefined, `Marked as paid. ${payeeName} will confirm once they see it.`)
-        : await updateShare(sheet.userId, 'disputed', ref.trim() || undefined, 'Marked as disputed. Sort it out in chat — nothing is charged or reversed by Project IRL.');
+        : await updateShare(sheet.userId, 'disputed', ref.trim() || undefined, 'Marked as disputed. Sort it out in chat, nothing is charged or reversed by Come Over.');
     if (ok) closeSheet();
   };
 
   return (
     <Screen
       refreshControl={<RefreshControl refreshing={expenseL.refreshing} onRefresh={expenseL.reload} tintColor={colors.ink} />}
-      header={<ScreenHeader title="Settle up" subtitle={relativeDay(e.createdAt)} right={plan ? <Button title="Plan" size="xs" variant="secondary" full={false} onPress={() => nav.navigate('activity_detail', { id: plan.id })} /> : null} />}
+      header={
+        <ScreenHeader
+          title="Settle up"
+          subtitle={relativeDay(e.createdAt)}
+          right={plan ? <IconButton icon="calendar" accessibilityLabel={`Open plan: ${plan.title}`} onPress={() => nav.navigate('activity_detail', { id: plan.id })} /> : null}
+        />
+      }
     >
-      <HeroCard>
-        <AppText variant="caption" color={colors.inkSoft} numberOfLines={1}>
+      {/* The bill */}
+      <HeroCard style={{ marginTop: space.xs }}>
+        <AppText variant="label" color={colors.inkSoft} numberOfLines={1}>
           {e.description}
         </AppText>
-        <AppText variant="display">{inr(e.totalMinor)}</AppText>
-        <AppText variant="label" color={colors.inkSoft}>
+        <AppText variant="display" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+          {money(e.totalMinor)}
+        </AppText>
+        <AppText variant="caption" color={colors.inkSoft} numberOfLines={1}>
           Paid by {iAmPayee ? 'you' : payeeName} · {METHOD_LABEL[e.splitMethod] || 'Split'}
         </AppText>
-        <ProgressBar value={done / e.shares.length} style={{ marginTop: space.md }} track="rgba(255,255,255,0.6)" fill={colors.ink} accessibilityLabel={`${done} of ${e.shares.length} settled`} />
-        <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 6 }}>
-          {done}/{e.shares.length} settled · {inr(outstanding)} outstanding
+        <ProgressBar value={done / e.shares.length} style={{ marginTop: space.md }} track={glass(0.6)} fill={colors.ink} accessibilityLabel={`${done} of ${e.shares.length} settled`} />
+        <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.xs }}>
+          {done}/{e.shares.length} settled · {money(outstanding)} outstanding
         </AppText>
       </HeroCard>
 
-      {/* My action card */}
+      {/* Your share */}
       {!iAmPayee && mine && (
         <Card style={{ marginTop: space.md }} bg={mine.state === 'confirmed' ? colors.mint : colors.surface}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -137,17 +148,17 @@ export default function SplitSettlementScreen() {
               <AppText variant="caption" color={colors.muted}>
                 Your share
               </AppText>
-              <AppText variant="h1">{inr(mine.amountMinor)}</AppText>
+              <AppText variant="h1">{money(mine.amountMinor)}</AppText>
             </View>
-            <StatusTag state={mine.state} />
+            <StatusTag state={mine.state} style={{ alignSelf: 'center' }} />
           </View>
           {mine.state === 'unsettled' || mine.state === 'disputed' ? (
             <>
               {e.payeeUpi ? (
                 <>
-                  <Button title={`Pay ${inr(mine.amountMinor)} via UPI app`} icon="external-link" style={{ marginTop: space.md }} onPress={payViaUpi} />
-                  <AppText variant="caption" color={colors.muted} selectable style={{ marginTop: 6 }}>
-                    Opens your UPI app with {payeeName}'s ID {e.payeeUpi} prefilled. You approve the payment there.
+                  <Button title={`Pay ${money(mine.amountMinor)} via UPI`} icon="external-link" style={{ marginTop: space.md }} onPress={payViaUpi} />
+                  <AppText variant="caption" color={colors.muted} selectable style={{ marginTop: space.xs }}>
+                    Opens your UPI app with {e.payeeUpi} filled in.
                   </AppText>
                 </>
               ) : (
@@ -155,12 +166,12 @@ export default function SplitSettlementScreen() {
                   {payeeName} hasn't added a UPI ID. Ask in chat, or pay in cash.
                 </AppText>
               )}
-              <Button title="I've paid" variant="secondary" icon="check" style={{ marginTop: space.xs }} disabled={busy === 'me'} onPress={() => setSheet({ kind: 'paid', userId: 'me' })} />
+              <Button title="I've paid" variant="secondary" icon="check" style={{ marginTop: space.sm }} disabled={busy === 'me'} onPress={() => setSheet({ kind: 'paid', userId: 'me' })} />
             </>
           ) : mine.state === 'marked_paid' ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm }}>
-              <Icon name="clock" size={14} />
-              <AppText variant="caption" color={colors.inkSoft} style={{ marginLeft: 6, flex: 1 }}>
+              <Icon name="clock" size={14} color={colors.inkSoft} />
+              <AppText variant="caption" color={colors.inkSoft} style={{ marginLeft: space.xs, flex: 1 }}>
                 Waiting for {payeeName} to confirm{mine.paymentReference ? ` · ref ${mine.paymentReference}` : ''}.
               </AppText>
             </View>
@@ -172,14 +183,7 @@ export default function SplitSettlementScreen() {
         </Card>
       )}
 
-      {notice ? (
-        <View style={{ flexDirection: 'row', backgroundColor: colors.lavender, borderRadius: radius.quest, padding: space.sm, marginTop: space.sm }} accessibilityLiveRegion="polite">
-          <Icon name="info" size={15} style={{ marginTop: 1 }} />
-          <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.xs }}>
-            {notice}
-          </AppText>
-        </View>
-      ) : null}
+      {notice ? <Hint tone="info" body={notice} style={{ marginTop: space.sm }} /> : null}
       {actionError && !sheet ? (
         <View style={{ flexDirection: 'row', backgroundColor: colors.pinkSoft, borderRadius: radius.quest, padding: space.sm, marginTop: space.sm }} accessibilityLiveRegion="assertive">
           <Icon name="alert-circle" size={15} color={colors.danger} style={{ marginTop: 1 }} />
@@ -189,38 +193,40 @@ export default function SplitSettlementScreen() {
         </View>
       ) : null}
 
-      <SectionHeader title="Everyone" right={iAmPayee && conv ? <Button title="Remind" icon="bell" size="xs" variant="secondary" full={false} onPress={remind} /> : null} />
-      <Card style={{ paddingVertical: 4 }}>
+      {/* Everyone */}
+      <SectionHeader title="Everyone" action={iAmPayee && conv ? 'Remind' : undefined} onAction={remind} />
+      <Card style={{ paddingVertical: space.xxs }}>
         {e.shares.map((sh, i) => {
           const isPayee = sh.userId === e.payeeId;
           return (
-            <View key={sh.userId} style={{ paddingVertical: 12, borderBottomWidth: i === e.shares.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <PersonAvatar id={sh.userId} size={38} />
-                <View style={{ flex: 1, marginLeft: space.sm }}>
-                  <AppText variant="bodyStrong">
+            <View key={sh.userId} style={{ paddingVertical: space.sm, borderBottomWidth: i === e.shares.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 40 }}>
+                <PersonAvatar id={sh.userId} size={40} />
+                <View style={{ flex: 1, marginLeft: space.sm, marginRight: space.xs }}>
+                  <AppText variant="bodyStrong" numberOfLines={1}>
                     {nameOf(sh.userId)}
-                    {isPayee ? ' · paid the bill' : ''}
                   </AppText>
-                  <AppText variant="caption" color={colors.muted}>
-                    {inr(sh.amountMinor)}
+                  <AppText variant="caption" color={colors.muted} numberOfLines={1}>
+                    {isPayee ? 'Paid the bill · ' : ''}
+                    {money(sh.amountMinor)}
                     {sh.paymentReference ? ` · ref ${sh.paymentReference}` : ''}
                   </AppText>
                 </View>
-                <StatusTag state={sh.state} />
+                <StatusTag state={sh.state} style={{ alignSelf: 'center' }} />
               </View>
               {iAmPayee && !isPayee && sh.state !== 'confirmed' && (
-                <View style={{ flexDirection: 'row', gap: space.xs, marginTop: space.sm, marginLeft: 50 }}>
+                <View style={{ flexDirection: 'row', gap: space.xs, marginTop: space.sm, marginLeft: 40 + space.sm }}>
                   <Button
                     title={sh.state === 'marked_paid' ? 'Confirm received' : 'Mark received'}
                     size="xs"
+                    variant="secondary"
                     icon="check"
                     full={false}
                     loading={busy === sh.userId}
                     disabled={!!busy}
                     onPress={() => updateShare(sh.userId, 'confirmed', undefined, `Confirmed ${nameOf(sh.userId)}'s payment.`)}
                   />
-                  {sh.state === 'marked_paid' && <Button title="Not received" size="xs" variant="secondary" full={false} disabled={!!busy} onPress={() => setSheet({ kind: 'dispute', userId: sh.userId })} />}
+                  {sh.state === 'marked_paid' && <Button title="Not received" size="xs" variant="ghost" full={false} disabled={!!busy} onPress={() => setSheet({ kind: 'dispute', userId: sh.userId })} />}
                 </View>
               )}
             </View>
@@ -232,7 +238,7 @@ export default function SplitSettlementScreen() {
         <Button title="Something's wrong with my share" variant="ghost" size="sm" style={{ marginTop: space.sm }} onPress={() => setSheet({ kind: 'dispute', userId: 'me' })} />
       )}
 
-      <LedgerNote style={{ marginTop: space.lg }} />
+      <LedgerNote style={{ marginTop: space.xl }} />
 
       <Sheet
         visible={!!sheet}
@@ -246,12 +252,10 @@ export default function SplitSettlementScreen() {
           </AppText>
         ) : null}
         <AppText color={colors.inkSoft} style={{ marginBottom: space.md }}>
-          {sheet?.kind === 'paid'
-            ? `${payeeName} will be asked to confirm. Add the UPI reference if you have it — it helps them find it. Never share your UPI PIN.`
-            : 'Add a short note. This only flags the share in the ledger; Project IRL does not charge, refund or reverse payments.'}
+          {sheet?.kind === 'paid' ? `${payeeName} will be asked to confirm. Never share your UPI PIN.` : 'This only flags the share. Come Over never charges or refunds.'}
         </AppText>
         <TextField
-          label={sheet?.kind === 'paid' ? 'UPI / transaction reference (optional)' : 'What’s wrong? (optional)'}
+          label={sheet?.kind === 'paid' ? 'UPI reference (optional)' : 'What’s wrong? (optional)'}
           value={ref}
           onChangeText={setRef}
           maxLength={sheet?.kind === 'paid' ? 40 : 120}

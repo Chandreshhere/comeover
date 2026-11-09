@@ -1,13 +1,15 @@
 // Report flow (modal): reason → details → confirmation. Free for everyone.
+// The header subtitle carries the step; one primary button per step.
 import React, { useEffect, useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { AppText, Avatar, Button, Card, Icon, ListGroup, ListRow, OptionCard, Pictogram, ProgressBar, Screen, ScreenHeader, TextField } from '@/components';
+import { AppText, Avatar, Button, Card, ListGroup, ListRow, Mascot, OptionCard, Pictogram, Screen, ScreenHeader, SectionHeader, TextField } from '@/components';
 import config from '@/config';
 import { useAppStore } from '@/store/useAppStore';
-import { colors, space } from '@/theme/tokens';
+import { colors, radius, space } from '@/theme/tokens';
 import haptics from '@/utils/haptics';
-import { REPORT_REASONS, callEmergency, reasonTitle } from './shared';
+import IconBubble from '@/features/system/IconBubble';
+import { EmergencyRow, REPORT_REASONS, reasonTitle } from './shared';
 import usePerson from './usePerson';
 
 export default function ReportFlowScreen() {
@@ -35,6 +37,7 @@ export default function ReportFlowScreen() {
   const subject = userId ? personName : activity ? activity.title : circle ? circle.name : messageId ? 'A message' : activityId ? 'A plan' : circleId ? 'A circle' : null;
   const subjectKind = userId ? 'Person' : activityId ? 'Plan' : circleId ? 'Circle' : messageId ? 'Message' : null;
   const isBlocked = userId ? blocked.includes(userId) : false;
+  const urgent = reason === 'underage' || reason === 'safety_threat';
 
   // Fetch plan context if we arrived via a deep link / notification.
   useEffect(() => {
@@ -60,8 +63,8 @@ export default function ReportFlowScreen() {
     } catch (e) {
       setError(
         e.code === 'network' || e.code === 'timeout'
-          ? "You're offline, so the report wasn't sent. Your text is still here — try again when connected."
-          : e.message || "Couldn't send your report. Your text is still here — try again."
+          ? "You're offline, so the report wasn't sent. Your text is still here. Try again when connected."
+          : e.message || "Couldn't send your report. Your text is still here. Try again."
       );
       setSubmitting(false);
       return;
@@ -96,18 +99,18 @@ export default function ReportFlowScreen() {
         }
       >
         <View style={{ alignItems: 'center', marginTop: space.lg }}>
-          <View style={{ width: 88, height: 88, borderRadius: 44, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' }}>
-            <Pictogram name="shield" size={44} />
+          <View style={{ width: 132, height: 120, borderRadius: radius.card, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' }}>
+            <Mascot size={108} pose="wave" />
           </View>
-          <AppText variant="h1" align="center" style={{ marginTop: space.md }}>
-            Thanks — we've got it
+          <AppText variant="h1" align="center" style={{ marginTop: space.md }} accessibilityRole="header">
+            Thanks, we've got it
           </AppText>
-          <AppText color={colors.muted} align="center" style={{ marginTop: space.xs }}>
+          <AppText color={colors.muted} align="center" style={{ marginTop: space.xs, maxWidth: 320 }}>
             {caseId ? `Case ${String(caseId).slice(-6).toUpperCase()} · ` : ''}
             {reasonTitle(reason)}
           </AppText>
           {alsoBlock && userId && !blockFailed ? (
-            <AppText variant="label" color={colors.success} style={{ marginTop: space.xs }}>
+            <AppText variant="label" color={colors.success} align="center" style={{ marginTop: space.xs }}>
               {person?.name || 'They'} {person ? 'is' : 'are'} also blocked.
             </AppText>
           ) : null}
@@ -117,31 +120,27 @@ export default function ReportFlowScreen() {
             </AppText>
           ) : null}
         </View>
-        <Card style={{ marginTop: space.xl }}>
+
+        <SectionHeader title="What happens next" />
+        <ListGroup>
           {[
-            ['check-circle', 'Received', "Your report is logged. The other person isn't told who reported them."],
-            ['eye', 'Reviewed by a person', reason === 'underage' || reason === 'safety_threat' ? 'Prioritised — we aim to act within hours.' : 'Usually within 24–48 hours. We may limit the account while we look.'],
-            ['bell', 'Outcome', 'You’ll get a notification and can see the status in Safety center.'],
-          ].map(([icon, title, body], i) => (
-            <View key={title} style={{ flexDirection: 'row', marginBottom: i === 2 ? 0 : space.md }}>
-              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: i === 0 ? colors.ink : colors.surfaceSubtle, alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name={icon} size={16} color={i === 0 ? colors.white : colors.ink} />
-              </View>
+            ['check-circle', 'mint', 'Received', "They aren't told who reported them."],
+            ['eye', 'lavender', 'Reviewed by a person', urgent ? 'Prioritised. We aim to act within hours.' : 'Usually within 24–48 hours.'],
+            ['bell', 'orange', 'Outcome', "You'll be notified. Track it in Safety center."],
+          ].map(([icon, tone, title, body], i) => (
+            <View key={title} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 64, paddingVertical: space.sm, borderBottomWidth: i === 2 ? 0 : 1, borderBottomColor: colors.border }}>
+              <IconBubble icon={icon} tone={tone} size={36} iconSize={18} />
               <View style={{ flex: 1, marginLeft: space.sm }}>
                 <AppText variant="bodyStrong">{title}</AppText>
-                <AppText variant="caption" color={colors.muted}>
+                <AppText variant="caption" color={colors.muted} style={{ marginTop: 2 }}>
                   {body}
                 </AppText>
               </View>
             </View>
           ))}
-        </Card>
-        <Card elevated={false} bg={colors.ink} style={{ marginTop: space.md, flexDirection: 'row', alignItems: 'center' }}>
-          <AppText variant="caption" color={colors.white} style={{ flex: 1 }}>
-            If you're in danger right now, call {config.EMERGENCY_NUMBER_IN}.
-          </AppText>
-          <Button title="Call" size="xs" variant="light" full={false} onPress={callEmergency} />
-        </Card>
+        </ListGroup>
+
+        <EmergencyRow body={`Call ${config.EMERGENCY_NUMBER_IN} first.`} style={{ marginTop: space.lg }} />
       </Screen>
     );
   }
@@ -158,15 +157,13 @@ export default function ReportFlowScreen() {
         )
       }
     >
-      <ProgressBar value={step === 'reason' ? 0.5 : 1} style={{ marginTop: space.xs }} accessibilityLabel="Report progress" />
-
       {subject ? (
-        <Card style={{ marginTop: space.md, flexDirection: 'row', alignItems: 'center' }} padding={12}>
+        <Card style={{ marginTop: space.xs, flexDirection: 'row', alignItems: 'center' }} padding={space.sm}>
           {userId ? (
             <Avatar seed={person?.avatarSeed || userId} uri={person?.avatarUrl} size={40} />
           ) : (
             <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: colors.lavender, alignItems: 'center', justifyContent: 'center' }}>
-              <Pictogram name={activity?.pictogram || circle?.pictogram || 'chat'} size={22} />
+              <Pictogram name={activity?.pictogram || circle?.pictogram || 'chat'} size={22} color={colors.ink} duotoneColor={colors.deep} duotoneOpacity={0.4} />
             </View>
           )}
           <View style={{ flex: 1, marginLeft: space.sm }}>
@@ -182,23 +179,23 @@ export default function ReportFlowScreen() {
 
       {step === 'reason' ? (
         <>
-          <AppText variant="h2" style={{ marginTop: space.lg, marginBottom: space.sm }}>
+          <AppText variant="h2" style={{ marginTop: subject ? space.lg : space.xs, marginBottom: space.sm }} accessibilityRole="header">
             What's going on?
           </AppText>
           {REPORT_REASONS.map((r) => (
             <OptionCard key={r.code} title={r.title} subtitle={r.subtitle} selected={reason === r.code} onPress={() => setReason(r.code)} />
           ))}
           <AppText variant="caption" color={colors.muted} style={{ marginTop: space.xs }}>
-            Reports are confidential. False reports to harm someone can lead to action on your account.
+            Reports are confidential. False reports can lead to action.
           </AppText>
         </>
       ) : (
         <>
-          <AppText variant="h2" style={{ marginTop: space.lg }}>
+          <AppText variant="h2" style={{ marginTop: subject ? space.lg : space.xs }} accessibilityRole="header">
             {reasonTitle(reason)}
           </AppText>
           <AppText variant="caption" color={colors.muted} style={{ marginTop: 2, marginBottom: space.md }}>
-            A few details help our team act quickly. Only the safety team sees this.
+            Only our safety team sees this.
           </AppText>
           <TextField
             label={reason === 'other' ? 'What happened? (required)' : 'What happened? (optional)'}
@@ -215,7 +212,7 @@ export default function ReportFlowScreen() {
             multiline
             maxLength={500}
             placeholder="e.g. messages in the plan's group chat on Tuesday"
-            helper="Our team can view the relevant in-app chat context for this case. Never send us passwords or payment PINs."
+            helper="Our team may view related chat context. Never send PINs."
           />
           {userId && !isBlocked ? (
             <ListGroup>

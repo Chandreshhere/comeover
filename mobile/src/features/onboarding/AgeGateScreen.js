@@ -6,7 +6,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { AppText, Button, Mascot, Sheet } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import { colors, radius, space } from '@/theme/tokens';
-import OnboardingFrame, { CheckRow, PointRow } from './components/OnboardingFrame';
+import OnboardingFrame, { CheckRow } from './components/OnboardingFrame';
 import { otpErrorMessage } from './authErrors';
 
 export default function AgeGateScreen() {
@@ -39,8 +39,8 @@ export default function AgeGateScreen() {
   return (
     <OnboardingFrame
       stepId={returnTo ? undefined : 'age_gate'}
-      title="A quick check"
-      subtitle="Project IRL is for adults meeting up in real life, so everyone here is 18+."
+      title="Are you 18+?"
+      subtitle="Come Over is for adults meeting up in real life."
       footer={
         <View>
           {error && (
@@ -53,24 +53,26 @@ export default function AgeGateScreen() {
         </View>
       }
     >
-      <CheckRow checked={adult} onToggle={() => setAdult((v) => !v)} label="I confirm I am 18 or older" sublabel="We don't ask for your date of birth. Misrepresenting your age breaks our Terms." />
+      <CheckRow
+        checked={adult}
+        onToggle={() => setAdult((v) => !v)}
+        label="I confirm I am 18 or older"
+        sublabel="Never shown publicly. No date of birth needed. Lying about age breaks our Terms."
+      />
       <CheckRow
         checked={terms}
         onToggle={() => setTerms((v) => !v)}
         label="I agree to the Terms and Community Guidelines"
-        sublabel="Platonic, activity-first plans · public meetup spots · respect boundaries · no selling or paid companionship."
+        sublabel="Platonic plans, public spots, respect boundaries, no paid companionship."
       />
-      <View style={{ marginTop: space.md }}>
-        <PointRow icon="eye-off" title="Your age isn't shown publicly" body="It only unlocks joining and hosting plans." />
-      </View>
 
-      <Sheet visible={under} onClose={() => setUnder(false)} title="Not yet — but soon">
+      <Sheet visible={under} onClose={() => setUnder(false)} title="Not yet, but soon">
         <View style={{ alignItems: 'center' }}>
           <View style={{ backgroundColor: colors.periwinkleWash, borderRadius: radius.card, padding: space.md }}>
             <Mascot size={120} pose="wave" mood="still" />
           </View>
           <AppText align="center" color={colors.inkSoft} style={{ marginTop: space.md }}>
-            Project IRL coordinates in-person meetups, so it's only open to people aged 18 and over. We'd love to see you when you're 18.
+            Come Over is for in-person meetups, so it's 18+ only. We'd love to see you when you're 18.
           </AppText>
           <Button
             title="Back to start"

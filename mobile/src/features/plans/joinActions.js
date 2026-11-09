@@ -11,8 +11,8 @@ const OFFLINE = ['network', 'timeout'];
 
 export function joinErrorCopy(e) {
   const code = e?.code;
-  if (code === 'capacity_full') return { title: 'This plan just filled up', body: 'You can join the waitlist — if a spot opens, the host can let you in.' };
-  if (code === 'age_gate_required') return { title: 'Confirm you’re 18+', body: 'Project IRL is for adults only. Confirm your age to join plans.' };
+  if (code === 'capacity_full') return { title: 'This plan just filled up', body: 'You can join the waitlist, if a spot opens, the host can let you in.' };
+  if (code === 'age_gate_required') return { title: 'Confirm you’re 18+', body: 'Come Over is for adults only. Confirm your age to join plans.' };
   if (code === 'account_restricted') return { title: 'Joining is paused', body: 'Your account is limited while a report is reviewed. Safety tools still work, and you can appeal from Settings.' };
   if (code === 'blocked' || code === 'not_allowed' || code === 'forbidden' || code === 'http_403') return { title: 'You can’t join this plan', body: e?.message || 'The host’s settings don’t allow this request.' };
   if (code === 'activity_cancelled' || code === 'activity_ended' || code === 'http_404' || code === 'not_found') return { title: 'Plan no longer available', body: 'It was cancelled or has ended.' };

@@ -32,7 +32,7 @@ export const VENUE_TYPES = [
   { value: 'Sports court', pictogram: 'badminton', hint: 'Courts, turfs, sports halls' },
   { value: 'Gym', pictogram: 'gym', hint: 'Gyms and fitness studios' },
   { value: 'Library', pictogram: 'book', hint: 'Libraries, reading rooms' },
-  { value: 'Partner venue', pictogram: 'star', hint: 'Verified IRL partner places' },
+  { value: 'Partner venue', pictogram: 'star', hint: 'Verified Come Over partner places' },
   { value: 'Public area', pictogram: 'pin', hint: 'Markets, landmarks, gates' },
 ];
 
@@ -121,7 +121,7 @@ export function computeStartsAt(when, { dayOffset = 0, time } = {}, now = new Da
   }
 }
 
-// Map the IRL Guide's time hints onto create-flow "when" values.
+// Map the Come Over Guide's time hints onto create-flow "when" values.
 export function whenFromAssistant(kind) {
   if (kind === 'tonight') return 'tonight';
   if (kind === 'weekend') return 'weekend';
@@ -137,7 +137,7 @@ export function looksPrivate(name = '') {
 
 export function defaultTitle(slug) {
   const c = categoryBySlug[slug];
-  return c ? `${c.short} — anyone?` : '';
+  return c ? `${c.short}. Anyone?` : '';
 }
 
 export const nearestDuration = (min) => DURATIONS.reduce((best, d) => (Math.abs(d - min) < Math.abs(best - min) ? d : best), DURATIONS[0]);

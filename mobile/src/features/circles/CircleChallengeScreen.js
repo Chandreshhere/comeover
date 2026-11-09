@@ -1,22 +1,24 @@
 // circle_challenge — shared group milestone. Only verified meetups count.
+// Progress up front; contributors below; the counting rules fold away.
 import React, { useMemo, useState } from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { AppText, Avatar, Button, Card, Icon, Mascot, ProgressBar, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
+import IconBubble from '@/features/system/IconBubble';
 import { personById } from '@/data/catalog';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
-import { colors, radius, space } from '@/theme/tokens';
+import { colors, glass, radius, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
 import haptics from '@/utils/haptics';
 import { circleAccent } from './components/CircleCard';
 import { normalizeChallenge } from './circleUtils';
 
 const RULES = [
-  { icon: 'check-circle', text: 'Only plans confirmed by the host and at least one attendee count.' },
-  { icon: 'repeat', text: 'Each plan counts once, no matter how many people attend.' },
-  { icon: 'heart', text: 'No pressure: missing it never affects your access or standing.' },
+  { icon: 'check-circle', tone: 'mint', text: 'Counts when the host and one attendee confirm it.' },
+  { icon: 'repeat', tone: 'lavender', text: 'Each plan counts once, however many attend.' },
+  { icon: 'heart', tone: 'pink', text: 'No pressure. Missing it never affects your standing.' },
 ];
 
 export default function CircleChallengeScreen() {
@@ -31,6 +33,7 @@ export default function CircleChallengeScreen() {
   const [celebrate, setCelebrate] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [howOpen, setHowOpen] = useState(false);
 
   const load = useLoader(`circleChallenge:${id}`, (s) => s.loadCircleChallenge(id), [id]);
   useLoader(`circle:${id}`, (s) => (s.circles.some((x) => x.id === id) ? null : s.loadCircle(id)), [id]);
@@ -58,6 +61,7 @@ export default function CircleChallengeScreen() {
   }
 
   const pct = Math.round((ch.progress / ch.goal) * 100);
+  const toGo = Math.max(0, ch.goal - ch.progress);
   const join = async () => {
     setBusy(true);
     setError(null);
@@ -85,83 +89,95 @@ export default function CircleChallengeScreen() {
             </AppText>
           )}
           {inChallenge ? (
-            <Button title="Plan a meetup for the circle" icon="plus" onPress={() => nav.navigate('circle_detail', { id: c.id })} />
+            <Button title="Plan a circle meetup" icon="plus" onPress={() => nav.navigate('circle_detail', { id: c.id })} />
           ) : (
             <Button title={joined ? 'Join the challenge' : 'Join circle & challenge'} onPress={join} loading={busy} disabled={ch.completed} />
           )}
         </View>
       }
     >
-      <Animated.View entering={enter(0)} style={{ backgroundColor: circleAccent(c), borderRadius: radius.hero, padding: space.lg, alignItems: 'center' }}>
-        <Mascot size={150} mood={celebrate ? 'celebrate' : 'idle'} celebrateKey={celebrate} />
+      {/* Progress: the one thing this screen is about */}
+      <Animated.View entering={enter(0)} style={{ backgroundColor: circleAccent(c), borderRadius: radius.hero, padding: space.lg, alignItems: 'center', marginTop: space.xs }}>
+        <Mascot size={120} mood={celebrate ? 'celebrate' : 'idle'} celebrateKey={celebrate} />
         <AppText variant="h2" align="center" style={{ marginTop: space.sm }} accessibilityRole="header">
           {ch.title}
         </AppText>
-        <AppText variant="caption" color={colors.inkSoft} align="center" style={{ marginTop: 4 }}>
+        <AppText variant="caption" color={colors.inkSoft} align="center" style={{ marginTop: space.xxs }} numberOfLines={2}>
           {ch.subtitle}
         </AppText>
         <View style={{ alignSelf: 'stretch', marginTop: space.lg }}>
-          <ProgressBar value={ch.progress / ch.goal} height={12} track="rgba(255,255,255,0.7)" accessibilityLabel={`${ch.progress} of ${ch.goal} meetups`} />
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
-            <AppText variant="label">
+          <ProgressBar value={ch.progress / ch.goal} height={12} track={glass(0.7)} accessibilityLabel={`${ch.progress} of ${ch.goal} meetups`} />
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: space.xs, gap: space.xs }}>
+            <AppText variant="label" style={{ flexShrink: 1 }} numberOfLines={1}>
               {ch.progress}/{ch.goal} meetups · {pct}%
             </AppText>
-            {ch.daysLeft != null && <AppText variant="label">{ch.daysLeft} days left</AppText>}
+            {ch.daysLeft != null && (
+              <AppText variant="label" numberOfLines={1}>
+                {ch.daysLeft === 1 ? '1 day left' : `${ch.daysLeft} days left`}
+              </AppText>
+            )}
           </View>
         </View>
-        {inChallenge && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.ink, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8, marginTop: space.md }} accessibilityLiveRegion="polite">
-            <Icon name="check" size={14} color={colors.white} />
-            <AppText variant="label" color={colors.white} style={{ marginLeft: 6 }}>
-              You're in — every verified meetup counts
-            </AppText>
-          </View>
-        )}
-      </Animated.View>
-
-      <View style={{ flexDirection: 'row', gap: space.sm, marginTop: space.md }}>
-        {ch.rewardXp ? (
-          <Card style={{ flex: 1, alignItems: 'center' }}>
-            <AppText variant="h2">+{ch.rewardXp}</AppText>
-            <AppText variant="caption" color={colors.muted}>
-              XP each when hit
-            </AppText>
-          </Card>
-        ) : null}
-        <Card style={{ flex: 1, alignItems: 'center' }}>
-          <AppText variant="h2">{ch.goal - ch.progress}</AppText>
-          <AppText variant="caption" color={colors.muted}>
-            meetups to go
+        <View
+          style={{ flexDirection: 'row', alignItems: 'center', maxWidth: '100%', backgroundColor: inChallenge ? colors.ink : colors.surface, borderRadius: radius.pill, paddingHorizontal: space.sm, paddingVertical: space.xs, marginTop: space.md }}
+          accessibilityLiveRegion="polite"
+        >
+          <Icon name={inChallenge ? 'check' : ch.completed ? 'trophy' : 'target'} size={14} color={inChallenge ? colors.white : colors.ink} />
+          <AppText variant="label" color={inChallenge ? colors.white : colors.ink} numberOfLines={1} style={{ marginLeft: space.xxs, flexShrink: 1 }}>
+            {[inChallenge ? "You're in" : ch.completed ? 'Goal reached' : `${toGo} to go`, ch.rewardXp ? `+${ch.rewardXp} XP each` : null].filter(Boolean).join(' · ')}
           </AppText>
-        </Card>
-      </View>
+        </View>
+      </Animated.View>
 
       <SectionHeader title="Top contributors" />
       <Card>
-        {ch.contributors.length === 0 && <AppText color={colors.muted}>No meetups yet — host the first one!</AppText>}
-        {ch.contributors.map((p, i) => (
-          <View key={p.id} style={{ flexDirection: 'row', alignItems: 'center', marginTop: i ? space.sm : 0 }}>
-            <AppText variant="label" color={colors.muted} style={{ width: 20 }}>
-              {i + 1}
-            </AppText>
-            <Avatar seed={p.id} uri={personById[p.id]?.avatarUrl} size={36} />
-            <AppText variant="bodyStrong" style={{ flex: 1, marginLeft: space.sm }}>
-              {p.name}
-            </AppText>
-            <AppText variant="label">{p.count} meetups</AppText>
-          </View>
-        ))}
+        {ch.contributors.length === 0 ? (
+          <AppText color={colors.muted}>No meetups yet. Host the first one!</AppText>
+        ) : (
+          ch.contributors.map((p, i) => (
+            <View key={p.id} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, marginTop: i ? space.xs : 0 }}>
+              <AppText variant="label" color={i === 0 ? colors.deep : colors.muted} align="center" style={{ width: 20, marginRight: space.xs }}>
+                {i + 1}
+              </AppText>
+              <Avatar seed={p.id} uri={personById[p.id]?.avatarUrl} size={36} />
+              <AppText variant="bodyStrong" numberOfLines={1} style={{ flex: 1, marginHorizontal: space.sm }}>
+                {p.name}
+              </AppText>
+              <AppText variant="label" color={colors.inkSoft}>
+                {p.count === 1 ? '1 meetup' : `${p.count} meetups`}
+              </AppText>
+            </View>
+          ))
+        )}
       </Card>
 
-      <SectionHeader title="How it works" />
-      <Card>
-        {RULES.map((r, i) => (
-          <View key={r.text} style={{ flexDirection: 'row', marginTop: i ? space.sm : 0 }}>
-            <Icon name={r.icon} size={16} color={colors.deep} style={{ marginTop: 3 }} />
-            <AppText style={{ flex: 1, marginLeft: space.sm }}>{r.text}</AppText>
+      {/* Fine print: one tap away */}
+      <View style={{ marginTop: space.xl, backgroundColor: colors.surface, borderRadius: radius.card, paddingHorizontal: space.md }}>
+        <Pressable
+          onPress={() => setHowOpen((o) => !o)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: howOpen }}
+          style={{ flexDirection: 'row', alignItems: 'center', minHeight: 56 }}
+        >
+          <Icon name="info" size={18} color={colors.ink} />
+          <AppText variant="bodyStrong" style={{ flex: 1, marginLeft: space.sm }}>
+            How it works
+          </AppText>
+          <Icon name={howOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.muted} />
+        </Pressable>
+        {howOpen && (
+          <View style={{ borderTopWidth: 1, borderTopColor: colors.border, paddingVertical: space.sm, gap: space.sm }}>
+            {RULES.map((r) => (
+              <View key={r.text} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <IconBubble icon={r.icon} tone={r.tone} size={32} iconSize={16} />
+                <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.sm }}>
+                  {r.text}
+                </AppText>
+              </View>
+            ))}
           </View>
-        ))}
-      </Card>
+        )}
+      </View>
     </Screen>
   );
 }

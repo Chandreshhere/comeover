@@ -109,11 +109,14 @@ const USERS = [
   ['dev', 'Dev', 'Old City', ['food', 'explore', 'music'], 'food', 'busy', 0.89, 3, 3, 'Street-food trails and heritage walks.'],
 ];
 
+// Social energy (introvert / ambivert / extrovert) — a mix so the ranking is visible; some never answered.
+const DEMO_STYLES = { aarav: 'introvert', diya: 'extrovert', kabir: 'ambivert', meera: 'introvert', rohan: 'extrovert', ishita: 'ambivert', vikram: 'extrovert', anaya: 'introvert', saanvi: 'ambivert', kavya: 'introvert', arjun: 'ambivert', dev: 'extrovert' };
+
 const BASE_VENUES = {
-  chaihouse: { name: 'Sabarmati Chai House', area: 'Navrangpura', type: 'Public café', cats: ['chai', 'cowork', 'study'], biz: 'biz2', verified: true, address: 'Ground floor, near the CG Road junction, Navrangpura', desc: 'Quiet corner café with long shared tables, plenty of power sockets and unlimited refills of masala chai.', offer: { title: '10% off for IRL groups of 3 or more', terms: 'Show the plan in the app at the counter. Valid Mon–Thu.' } },
-  roast: { name: 'Riverside Roast', area: 'Riverfront', type: 'Public café', cats: ['chai', 'photo', 'walk', 'music'], biz: 'biz1', verified: true, address: 'Promenade level, Riverfront east, Ahmedabad', desc: 'Open-air café on the promenade. Good light for photos, better filter coffee.', offer: { title: 'Free cookie with every chai flight', terms: 'One per person. Show your IRL plan.' } },
+  chaihouse: { name: 'Sabarmati Chai House', area: 'Navrangpura', type: 'Public café', cats: ['chai', 'cowork', 'study'], biz: 'biz2', verified: true, address: 'Ground floor, near the CG Road junction, Navrangpura', desc: 'Quiet corner café with long shared tables, plenty of power sockets and unlimited refills of masala chai.', offer: { title: '10% off for Come Over groups of 3 or more', terms: 'Show the plan in the app at the counter. Valid Mon–Thu.' } },
+  roast: { name: 'Riverside Roast', area: 'Riverfront', type: 'Public café', cats: ['chai', 'photo', 'walk', 'music'], biz: 'biz1', verified: true, address: 'Promenade level, Riverfront east, Ahmedabad', desc: 'Open-air café on the promenade. Good light for photos, better filter coffee.', offer: { title: 'Free cookie with every chai flight', terms: 'One per person. Show your Come Over plan.' } },
   dice: { name: 'Dice & Dough', area: 'Vastrapur', type: 'Board-game café', cats: ['boardgames', 'gaming', 'food'], biz: 'biz1', verified: true, address: 'First floor, Vastrapur, Ahmedabad', desc: 'Two hundred board games, thin-crust pizza and staff who will teach you Catan again.', offer: { title: '₹100 off the table fee for groups of 4+', terms: 'Weekdays before 6 PM.' } },
-  court7: { name: 'Court 7 Sports Hub', area: 'Bodakdev', type: 'Sports court', cats: ['badminton', 'gym', 'run'], biz: 'biz2', verified: true, address: 'Bodakdev, Ahmedabad (sports complex)', desc: 'Six wooden badminton courts, a small gym and a running track.', offer: { title: 'First hour free for new IRL members', terms: 'One redemption per member.' } },
+  court7: { name: 'Court 7 Sports Hub', area: 'Bodakdev', type: 'Sports court', cats: ['badminton', 'gym', 'run'], biz: 'biz2', verified: true, address: 'Bodakdev, Ahmedabad (sports complex)', desc: 'Six wooden badminton courts, a small gym and a running track.', offer: { title: 'First hour free for new Come Over members', terms: 'One redemption per member.' } },
   haveli: { name: 'Old City Heritage Café', area: 'Old City', type: 'Public café', cats: ['food', 'explore', 'photo'], biz: 'biz3', verified: false, address: 'Pol area, Old City, Ahmedabad', desc: 'Courtyard café in a restored haveli. Awaiting verification.', offer: null },
 };
 
@@ -190,7 +193,7 @@ function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId =
       staff: [{ userId: ME, role: 'owner' }],
       createdAt: T.ago(10 * DAY),
     });
-    VENUES.moon = { name: 'The Cowork Chai Room', area: 'Navrangpura', type: 'Public café', cats: ['cowork', 'chai', 'study'], biz: 'bizT', verified: true, address: 'Navrangpura, Ahmedabad', desc: 'Day-pass coworking tables inside a café. Demo venue owned by the test account.', offer: { title: 'Free chai refill for IRL coworking groups', terms: 'Groups of 3+.' } };
+    VENUES.moon = { name: 'The Cowork Chai Room', area: 'Navrangpura', type: 'Public café', cats: ['cowork', 'chai', 'study'], biz: 'bizT', verified: true, address: 'Navrangpura, Ahmedabad', desc: 'Day-pass coworking tables inside a café. Demo venue owned by the test account.', offer: { title: 'Free chai refill for Come Over coworking groups', terms: 'Groups of 3+.' } };
   }
   Object.entries(VENUES).forEach(([k, v]) => {
     const c = near(v.area, `venue:${k}`, 0.0025);
@@ -336,7 +339,7 @@ function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId =
       { u: 'rohan', state: 'requested', intro: 'Working on a design project, can bring my own charger!', reqAt: T.ago(40 * MIN) },
       { u: 'ishita', state: 'requested', intro: 'New to the area, would love some company while I work.', reqAt: T.ago(38 * MIN) },
     ] });
-  addPlan({ key: 'boardgames_night', host: 'ishita', cat: 'boardgames', title: 'Board game night at Dice & Dough', desc: 'Catan, Codenames and new-player-friendly games. The venue offers a discount for IRL groups.', start: eve(20), dur: 150, cap: 8, venue: 'dice', sponsored: true, tags: ['beginner-friendly', 'indoors'], cost: '₹150 table fee (venue)', level: 'beginner', createdHoursAgo: 40,
+  addPlan({ key: 'boardgames_night', host: 'ishita', cat: 'boardgames', title: 'Board game night at Dice & Dough', desc: 'Catan, Codenames and new-player-friendly games. The venue offers a discount for Come Over groups.', start: eve(20), dur: 150, cap: 8, venue: 'dice', sponsored: true, tags: ['beginner-friendly', 'indoors'], cost: '₹150 table fee (venue)', level: 'beginner', createdHoursAgo: 40,
     rows: [{ u: 'rohan', state: 'accepted' }, { u: 'dev', state: 'accepted' }, { u: 'arjun', state: 'accepted' }, { u: 'kabir', state: 'accepted' }, { u: 'anaya', state: 'accepted' }] });
   addPlan({ key: 'waitlist_full', host: 'rohan', cat: 'gaming', title: 'FIFA night: 2v2 tournament', desc: 'Casual 2v2. Losers buy nothing; winners get bragging rights.', start: T.at(2, 21), dur: 150, cap: 4, area: 'Satellite', venueName: 'Gaming lounge, Satellite', venueType: 'Gaming lounge', tags: ['indoors', 'night'], cost: '₹200/hr per station (venue)', createdHoursAgo: 44,
     rows: [{ u: 'arjun', state: 'accepted' }, { u: 'dev', state: 'accepted' }, { u: 'aarav', state: 'accepted' }, { u: 'ME', state: 'waitlisted', pos: 1 }, { u: 'kavya', state: 'waitlisted', pos: 2 }] });
@@ -478,6 +481,7 @@ function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId =
         boundaries: null,
         languages: ['English', 'Hindi', 'Gujarati'],
         reliabilityScore: rel,
+        socialStyle: DEMO_STYLES[k] || null,
         preferences: { avatarSeed: `demo-${k}`, showOnRadar: true, radiusKm: 3, language: 'English', onboardedAt: createdAt },
         createdAt,
         updatedAt: createdAt,
@@ -688,7 +692,7 @@ function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId =
     ['quest', 'Quest complete: Host a micro-plan', 'Claim +100 XP on your roadmap.', 180, false, { screen: 'social_roadmap', params: {} }, { questId: 'q_host' }],
     ['activity', 'Your run starts soon', 'Easy riverfront jog starts in 25 min. Check in when you arrive.', 20, true, { screen: 'activity_detail', params: { id: ids.activity.run_soon } }, { activityId: ids.activity.run_soon }],
     ['safety', 'Safety tip', 'Share your plan with a trusted contact from any plan page.', 30 * 60, true, { screen: 'safety_center', params: {} }, {}],
-    ['system', 'Welcome to Project IRL', 'Find someone for whatever you are doing. Start with a plan near you.', 7 * 24 * 60, true, { screen: 'discover_home', params: {} }, {}],
+    ['system', 'Welcome to Come Over', 'Find someone for whatever you are doing. Start with a plan near you.', 7 * 24 * 60, true, { screen: 'discover_home', params: {} }, {}],
   ];
   N.forEach(([type, title, body, minsAgo, read, target, data], i) => {
     const at = T.ago(minsAgo * MIN);
@@ -838,7 +842,7 @@ async function ensureTaxonomy() {
       !areas
     );
   };
-  if (await missing()) await require('./seed').seed();
+  if (await missing()) await require('./seed').seed({ onlyMissing: true });
   const [qs, as] = await Promise.all([Quest.find({}).select('slug').lean(), Achievement.find({}).select('slug').lean()]);
   return { quests: new Map(qs.map((q) => [q.slug, q._id])), achievements: new Map(as.map((a) => [a.slug, a._id])) };
 }
@@ -852,7 +856,7 @@ function testUserPatch(now, xp) {
     profile: {
       displayName: 'Chandresh',
       avatarKey: null,
-      bio: 'Chai, badminton and weekend walks. Building IRL, testing IRL.',
+      bio: 'Chai, badminton and weekend walks. Building Come Over, testing it in real life.',
       homeCity: 'Ahmedabad',
       homeArea: 'Navrangpura',
       interests: ['chai', 'badminton', 'walk', 'cowork', 'run'],

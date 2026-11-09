@@ -1,12 +1,17 @@
-// Safety toolkit — never behind a paywall.
+// Safety toolkit — never behind a paywall. Calm and scannable:
+// 1) share my plan + emergency call, 2) before-you-go checklist,
+// 3) trusted contacts, 4) reports & guidelines (details open in sheets).
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, RefreshControl, View } from 'react-native';
+import { Keyboard, Platform, Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { Footprints } from 'phosphor-react-native/src/icons/Footprints';
+import { Scales } from 'phosphor-react-native/src/icons/Scales';
 import {
   AppText,
   Avatar,
   Button,
-  Card,
   HeroCard,
   Icon,
   IconButton,
@@ -18,24 +23,78 @@ import {
   ScreenHeader,
   SectionHeader,
   Sheet,
+  Skeleton,
   Tag,
   TextField,
+  usePressScale,
 } from '@/components';
-import config from '@/config';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
 import { colors, radius, space } from '@/theme/tokens';
 import { relativeDay } from '@/utils/format';
 import haptics from '@/utils/haptics';
-import { GUIDELINES, REPORT_STATUS, callEmergency, reasonTitle } from './shared';
+import IconBubble from '@/features/system/IconBubble';
+import { EmergencyRow, GUIDELINES, reasonTitle, reportStatus } from './shared';
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+// [icon, text, bubble tone]
 const CHECKLIST = [
-  ['map-pin', 'Meet at the public venue on the plan'],
-  ['share-2', 'Tell a trusted contact where you’re going'],
-  ['navigation', 'Arrive and leave on your own'],
-  ['message-circle', 'Keep chat in the app until you’re comfortable'],
-  ['heart', 'Trust your gut — you can leave anytime, no explanation needed'],
+  ['map-pin', 'Meet at the plan’s public venue', 'periwinkle'],
+  ['share-2', 'Tell someone where you’re going', 'orange'],
+  [Footprints, 'Get there and back on your own', 'mint'],
+  ['chats', 'Keep chat in the app at first', 'lavender'],
+  ['heart', 'Trust your gut. Leave anytime', 'pink'],
 ];
+
+// [icon, tone, title, one-line body]
+const HOW_IT_WORKS = [
+  ['flag', 'pink', 'Report', 'A person reviews every report. They’re not told it was you.'],
+  ['slash', 'orange', 'Block', 'Instant and private. Undo anytime in Settings.'],
+  [Scales, 'lavender', 'Fair decisions', 'Everyone sees the outcome of their case and can appeal.'],
+];
+
+// iOS keyboard height. The shared Sheet is bottom-anchored inside a Modal and
+// doesn't avoid the keyboard itself, so the add-contact form pads by this much
+// to keep its fields and Save button just above the keys. (Android resizes the
+// modal window on its own.)
+function useKeyboardHeight() {
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return undefined;
+    const a = Keyboard.addListener('keyboardWillShow', (e) => setH(e.endCoordinates?.height || 0));
+    const b = Keyboard.addListener('keyboardWillHide', () => setH(0));
+    return () => {
+      a.remove();
+      b.remove();
+    };
+  }, []);
+  return h;
+}
+
+// Checklist row: tap to tick; text dims once done.
+function CheckItem({ icon, text, tone, on, last, onToggle }) {
+  const press = usePressScale(0.97);
+  return (
+    <AnimatedPressable
+      onPress={onToggle}
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: on }}
+      accessibilityLabel={text}
+      style={[{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm, minHeight: 56, borderBottomWidth: last ? 0 : 1, borderBottomColor: colors.border }, press.style]}
+    >
+      <IconBubble icon={icon} tone={on ? 'neutral' : tone} size={36} iconSize={18} square style={{ marginRight: space.sm }} />
+      <AppText style={{ flex: 1, marginRight: space.sm }} color={on ? colors.muted : colors.ink}>
+        {text}
+      </AppText>
+      <View style={{ width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: on ? colors.success : colors.border, backgroundColor: on ? colors.success : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+        {on && <Icon name="check" size={14} color={colors.pureWhite} />}
+      </View>
+    </AnimatedPressable>
+  );
+}
 
 export default function SafetyCenterScreen() {
   const nav = useNavigation();
@@ -57,7 +116,12 @@ export default function SafetyCenterScreen() {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [guidelinesOpen, setGuidelinesOpen] = useState(false);
+  const [reportsOpen, setReportsOpen] = useState(false);
   const opened = useRef(false);
+  const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight();
+  // The sheet already pads the home-indicator area, which the keyboard covers too.
+  const sheetKeyboardPad = keyboardHeight ? Math.max(0, keyboardHeight - insets.bottom - space.md + space.sm) : 0;
 
   useEffect(() => {
     if (scrollTarget === 'guidelines' && !opened.current) {
@@ -93,74 +157,72 @@ export default function SafetyCenterScreen() {
     try {
       await removeTrustedContact(c.id);
     } catch (e) {
-      setRemoveError(e.code === 'network' || e.code === 'timeout' ? "You're offline — couldn't remove that contact." : e.message || "Couldn't remove that contact. Try again.");
+      setRemoveError(e.code === 'network' || e.code === 'timeout' ? "You're offline. Couldn't remove that contact." : e.message || "Couldn't remove that contact. Try again.");
     } finally {
       setRemoving(null);
     }
   };
 
+  const loaded = safetyQ.status === 'ready' || safetyQ.status === 'error';
+  const latest = reports[0];
+  const reportsSubtitle = latest ? `Latest: ${reportStatus(latest.status).label}` : safetyQ.status === 'error' ? "Couldn't load" : 'None filed';
+
   return (
     <Screen header={<ScreenHeader title="Safety center" />} refreshControl={<RefreshControl refreshing={safetyQ.refreshing} onRefresh={safetyQ.reload} tintColor={colors.ink} />}>
+      {/* 1. The two things that matter most: share the plan, call for help */}
       <HeroCard style={{ marginTop: space.xs }}>
-        <View pointerEvents="none" style={{ position: 'absolute', right: 10, bottom: 10, opacity: 0.3 }}>
-          <Pictogram name="shield" size={84} strokeWidth={1.4} />
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+            <Pictogram name="shield" size={26} color={colors.ink} duotoneColor={colors.success} duotoneOpacity={0.45} />
+          </View>
+          <View style={{ flex: 1, marginLeft: space.sm }}>
+            <AppText variant="h2" accessibilityRole="header">
+              Meet in public. Leave anytime.
+            </AppText>
+          </View>
         </View>
-        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' }}>
-          <Pictogram name="shield" size={26} />
-        </View>
-        <AppText variant="h2" style={{ marginTop: space.sm }}>
-          Meet in public.{'\n'}Leave anytime.
+        <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.sm }}>
+          Every safety tool here is free, always.
         </AppText>
-        <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 4, maxWidth: '80%' }}>
-          Every safety tool here is free for everyone, always.
-        </AppText>
-        <View style={{ flexDirection: 'row', gap: space.xs, marginTop: space.md }}>
-          <Button title="Share my plan" icon="share-2" size="sm" full={false} onPress={() => nav.navigate('emergency_share')} />
-          <Button title={`Call ${config.EMERGENCY_NUMBER_IN}`} icon="phone" size="sm" variant="light" full={false} onPress={callEmergency} />
-        </View>
+        <Button title="Share my plan" icon="share-2" size="sm" full={false} style={{ marginTop: space.md }} onPress={() => nav.navigate('emergency_share')} />
       </HeroCard>
 
-      {/* Checklist */}
-      <SectionHeader title="Before every meetup" />
+      <EmergencyRow style={{ marginTop: space.sm }} />
+
+      {/* 2. Checklist */}
+      <SectionHeader title="Before you go" />
       <ListGroup>
-        {CHECKLIST.map(([icon, text], i) => {
-          const on = !!checked[i];
-          return (
-            <Pressable
-              key={text}
-              onPress={() => {
-                haptics.select();
-                setChecked((c) => ({ ...c, [i]: !c[i] }));
-              }}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: on }}
-              accessibilityLabel={text}
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: i === CHECKLIST.length - 1 ? 0 : 1, borderBottomColor: colors.border }}
-            >
-              <View style={{ width: 38, height: 38, borderRadius: 12, backgroundColor: colors.surfaceSubtle, alignItems: 'center', justifyContent: 'center', marginRight: space.sm }}>
-                <Icon name={icon} size={18} />
-              </View>
-              <AppText style={{ flex: 1 }} color={on ? colors.muted : colors.ink}>
-                {text}
-              </AppText>
-              <View style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: on ? colors.ink : colors.border, backgroundColor: on ? colors.ink : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
-                {on && <Icon name="check" size={14} color={colors.white} />}
-              </View>
-            </Pressable>
-          );
-        })}
+        {CHECKLIST.map(([icon, text, tone], i) => (
+          <CheckItem
+            key={text}
+            icon={icon}
+            text={text}
+            tone={tone}
+            on={!!checked[i]}
+            last={i === CHECKLIST.length - 1}
+            onToggle={() => {
+              haptics.select();
+              setChecked((c) => ({ ...c, [i]: !c[i] }));
+            }}
+          />
+        ))}
       </ListGroup>
 
-      {/* Trusted contacts */}
-      <SectionHeader title="Trusted contacts" action="Add" onAction={() => setAdding(true)} />
+      {/* 3. Trusted contacts */}
+      <SectionHeader title="Trusted contacts" action={trustedContacts.length ? 'Add' : undefined} onAction={() => setAdding(true)} />
       {trustedContacts.length ? (
         <ListGroup>
           {trustedContacts.map((c, i) => (
-            <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: i === trustedContacts.length - 1 ? 0 : 1, borderBottomColor: colors.border, opacity: removing === c.id ? 0.5 : 1 }}>
+            <View
+              key={c.id}
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm, minHeight: 64, borderBottomWidth: i === trustedContacts.length - 1 ? 0 : 1, borderBottomColor: colors.border, opacity: removing === c.id ? 0.5 : 1 }}
+            >
               <Avatar seed={c.phone || c.id} size={40} />
-              <View style={{ flex: 1, marginLeft: space.sm }}>
-                <AppText variant="bodyStrong">{c.name}</AppText>
-                <AppText variant="caption" color={colors.muted}>
+              <View style={{ flex: 1, marginHorizontal: space.sm }}>
+                <AppText variant="bodyStrong" numberOfLines={1}>
+                  {c.name}
+                </AppText>
+                <AppText variant="caption" color={colors.muted} numberOfLines={1}>
                   {c.phone}
                   {c.status === 'pending' ? ' · invite sent' : ''}
                 </AppText>
@@ -169,21 +231,16 @@ export default function SafetyCenterScreen() {
             </View>
           ))}
         </ListGroup>
-      ) : safetyQ.status === 'ready' || safetyQ.status === 'error' ? (
-        <Card elevated={false} bg={colors.surface} style={{ alignItems: 'flex-start' }}>
-          <AppText variant="bodyStrong">{safetyQ.status === 'error' ? "Couldn't load your contacts" : 'No trusted contacts yet'}</AppText>
-          <AppText variant="caption" color={colors.muted} style={{ marginTop: 2 }}>
-            {safetyQ.status === 'error' ? safetyQ.error || 'Check your connection.' : "Add someone you can send plan details to in one tap. They don't need the app."}
-          </AppText>
-          <View style={{ flexDirection: 'row', gap: space.xs, marginTop: space.sm }}>
-            <Button title="Add a contact" icon="user-plus" size="sm" full={false} onPress={() => setAdding(true)} />
-            {safetyQ.status === 'error' && <Button title="Retry" icon="refresh-cw" size="sm" variant="secondary" full={false} onPress={safetyQ.reload} />}
-          </View>
-        </Card>
+      ) : loaded ? (
+        <ListGroup>
+          {safetyQ.status === 'error' ? (
+            <ListRow icon="cloud-off" title="Couldn't load contacts" subtitle={safetyQ.error || 'Check your connection.'} onPress={safetyQ.reload} right={<AppText variant="label" color={colors.deep}>Retry</AppText>} last />
+          ) : (
+            <ListRow icon="user-plus" title="Add a trusted contact" subtitle="They get your plan details in one tap" onPress={() => setAdding(true)} last />
+          )}
+        </ListGroup>
       ) : (
-        <QueryState status={safetyQ.status} hasData={false} skeletonRows={1} skeletonHeight={64}>
-          {null}
-        </QueryState>
+        <Skeleton height={64} r={radius.card} />
       )}
       {removeError ? (
         <AppText variant="caption" color={colors.danger} style={{ marginTop: space.xs }} accessibilityLiveRegion="polite">
@@ -191,117 +248,91 @@ export default function SafetyCenterScreen() {
         </AppText>
       ) : null}
 
-      {/* How it works */}
+      {/* 4. Reports & guidelines — details open in sheets */}
       <SectionHeader title="If something feels off" />
-      <View style={{ gap: space.xs }}>
-        <Card style={{ flexDirection: 'row' }} padding={14}>
-          <Icon name="flag" size={18} style={{ marginTop: 2 }} />
-          <View style={{ flex: 1, marginLeft: space.sm }}>
-            <AppText variant="bodyStrong">Report</AppText>
-            <AppText variant="caption" color={colors.muted}>
-              From any profile, plan, chat message or circle. A person on our team reviews every report; serious ones are prioritised. The person isn't told who reported them.
-            </AppText>
-          </View>
-        </Card>
-        <Card style={{ flexDirection: 'row' }} padding={14}>
-          <Icon name="slash" size={18} style={{ marginTop: 2 }} />
-          <View style={{ flex: 1, marginLeft: space.sm }}>
-            <AppText variant="bodyStrong">Block</AppText>
-            <AppText variant="caption" color={colors.muted}>
-              Instantly stops them seeing your plans or messaging you. They aren't notified. Undo anytime in Settings.
-            </AppText>
-          </View>
-        </Card>
-        <Card style={{ flexDirection: 'row' }} padding={14}>
-          <Icon name="refresh-cw" size={18} style={{ marginTop: 2 }} />
-          <View style={{ flex: 1, marginLeft: space.sm }}>
-            <AppText variant="bodyStrong">Fair decisions & appeals</AppText>
-            <AppText variant="caption" color={colors.muted}>
-              Accounts may be limited while a report is reviewed. Everyone can see the outcome of their case and appeal it.
-            </AppText>
-          </View>
-        </Card>
-      </View>
-      <Button title="Report something" icon="flag" variant="secondary" style={{ marginTop: space.md }} onPress={() => nav.navigate('report_flow')} />
-
-      {/* My reports */}
-      <SectionHeader title="My reports" />
-      <QueryState
-        status={safetyQ.status}
-        error={safetyQ.error}
-        hasData={reports.length > 0}
-        onRetry={safetyQ.reload}
-        skeletonRows={2}
-        skeletonHeight={56}
-        empty={{ title: 'No reports filed', body: 'Reports you file will show their status here.', pose: 'wave' }}
-      >
-        <ListGroup>
-          {reports.map((r, i) => {
-            const st = REPORT_STATUS[r.status] || REPORT_STATUS.open;
-            return (
-              <ListRow
-                key={r.id}
-                icon="file-text"
-                title={reasonTitle(r.reasonCode)}
-                subtitle={`Case ${String(r.id).slice(-6).toUpperCase()}${r.createdAt ? ` · ${relativeDay(r.createdAt)}` : ''}`}
-                right={<Tag label={st.label} bg={st.bg} />}
-                last={i === reports.length - 1}
-              />
-            );
-          })}
-        </ListGroup>
-      </QueryState>
-
-      {/* Guidelines */}
-      <SectionHeader title="Community guidelines" action="Read all" onAction={() => setGuidelinesOpen(true)} />
-      <Card elevated={false} bg={colors.surface} padding={14}>
-        {GUIDELINES.slice(0, 3).map(([icon, title]) => (
-          <View key={title} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
-            <Icon name={icon} size={16} color={colors.inkSoft} />
-            <AppText variant="label" style={{ marginLeft: space.xs }}>
-              {title}
-            </AppText>
-          </View>
-        ))}
-      </Card>
-
-      <Card elevated={false} bg={colors.ink} style={{ marginTop: space.xl, flexDirection: 'row', alignItems: 'center' }}>
-        <Icon name="alert-triangle" color={colors.orange} />
-        <AppText variant="caption" color={colors.white} style={{ flex: 1, marginLeft: space.sm }}>
-          In immediate danger? Call {config.EMERGENCY_NUMBER_IN} first. Then tell us so we can act on the account.
-        </AppText>
-        <Button title="Call" size="xs" variant="light" full={false} onPress={callEmergency} />
-      </Card>
+      <ListGroup>
+        <ListRow icon="flag" title="Report something" subtitle="Reviewed by a person, kept private" onPress={() => nav.navigate('report_flow')} />
+        <ListRow icon="file-text" title="My reports" subtitle={reportsSubtitle} value={reports.length ? String(reports.length) : undefined} onPress={() => setReportsOpen(true)} />
+        <ListRow icon="book-open" title="Community guidelines" subtitle="Platonic, public and respectful" onPress={() => setGuidelinesOpen(true)} last />
+      </ListGroup>
 
       <Sheet visible={adding} onClose={() => setAdding(false)} title="Add trusted contact">
-        <TextField label="Name" value={name} onChangeText={(t) => { setName(t); setError(null); }} placeholder="e.g. Didi" autoCapitalize="words" />
-        <TextField
-          label="Mobile number"
-          value={phone}
-          onChangeText={(t) => { setPhone(t); setError(null); }}
-          keyboardType="phone-pad"
-          placeholder="98765 43210"
-          maxLength={14}
-          error={error}
-          helper="We only text them when you choose to share a plan."
-        />
-        <Button title="Save contact" loading={saving} onPress={saveContact} />
+        <View style={{ paddingBottom: sheetKeyboardPad }}>
+          <TextField label="Name" value={name} onChangeText={(t) => { setName(t); setError(null); }} placeholder="e.g. Didi" autoCapitalize="words" autoFocus />
+          <TextField
+            label="Mobile number"
+            value={phone}
+            onChangeText={(t) => { setPhone(t); setError(null); }}
+            keyboardType="phone-pad"
+            placeholder="98765 43210"
+            maxLength={14}
+            error={error}
+            helper="We only text them when you choose to share a plan."
+          />
+          <Button title="Save contact" icon="user-plus" loading={saving} onPress={saveContact} />
+        </View>
+      </Sheet>
+
+      <Sheet visible={reportsOpen} onClose={() => setReportsOpen(false)} title="My reports">
+        <ScrollView showsVerticalScrollIndicator={false}>
+          <QueryState
+            status={safetyQ.status}
+            error={safetyQ.error}
+            hasData={reports.length > 0}
+            onRetry={safetyQ.reload}
+            skeletonRows={2}
+            skeletonHeight={56}
+            empty={{ title: 'No reports filed', body: 'Reports you file show their status here.', pose: 'wave' }}
+          >
+            <ListGroup>
+              {reports.map((r, i) => {
+                const st = reportStatus(r.status);
+                return (
+                  <ListRow
+                    key={r.id}
+                    icon="file-text"
+                    title={reasonTitle(r.reasonCode)}
+                    subtitle={`Case ${String(r.id).slice(-6).toUpperCase()}${r.createdAt ? ` · ${relativeDay(r.createdAt)}` : ''}`}
+                    right={<Tag label={st.label} bg={st.bg} fg={colors.ink} style={{ alignSelf: 'center' }} />}
+                    last={i === reports.length - 1}
+                  />
+                );
+              })}
+            </ListGroup>
+          </QueryState>
+          <AppText variant="h3" style={{ marginTop: space.lg, marginBottom: space.sm }} accessibilityRole="header">
+            How it works
+          </AppText>
+          <ListGroup>
+            {HOW_IT_WORKS.map(([icon, tone, title, body], i) => (
+              <View key={title} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 64, paddingVertical: space.sm, borderBottomWidth: i === HOW_IT_WORKS.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
+                <IconBubble icon={icon} tone={tone} size={36} iconSize={18} />
+                <View style={{ flex: 1, marginLeft: space.sm }}>
+                  <AppText variant="bodyStrong">{title}</AppText>
+                  <AppText variant="caption" color={colors.muted} style={{ marginTop: 2 }}>
+                    {body}
+                  </AppText>
+                </View>
+              </View>
+            ))}
+          </ListGroup>
+        </ScrollView>
       </Sheet>
 
       <Sheet visible={guidelinesOpen} onClose={() => setGuidelinesOpen(false)} title="Community guidelines">
-        <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, padding: space.md }}>
-          {GUIDELINES.map(([icon, title, body], i) => (
-            <View key={title} style={{ flexDirection: 'row', paddingVertical: space.xs, borderBottomWidth: i === GUIDELINES.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
-              <Icon name={icon} size={18} style={{ marginTop: 2 }} />
+        <ScrollView style={{ backgroundColor: colors.surface, borderRadius: radius.card }} contentContainerStyle={{ paddingHorizontal: space.md, paddingVertical: space.xs }} showsVerticalScrollIndicator={false}>
+          {GUIDELINES.map(([icon, title, body, tone], i) => (
+            <View key={title} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: space.sm, borderBottomWidth: i === GUIDELINES.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
+              <IconBubble icon={icon} tone={tone} size={36} iconSize={18} />
               <View style={{ flex: 1, marginLeft: space.sm }}>
                 <AppText variant="bodyStrong">{title}</AppText>
-                <AppText variant="caption" color={colors.muted}>
+                <AppText variant="caption" color={colors.muted} style={{ marginTop: 2 }}>
                   {body}
                 </AppText>
               </View>
             </View>
           ))}
-        </View>
+        </ScrollView>
       </Sheet>
     </Screen>
   );

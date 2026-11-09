@@ -457,7 +457,7 @@ const routes = {
         amountMinor: order.amountMinor,
         currency: order.currency,
         keyId: order.keyId,
-        description: `Project IRL Venue/Club plan · ${v.months} month(s)`,
+        description: `Come Over Venue/Club plan · ${v.months} month(s)`,
         businessName: b.name,
       });
     });

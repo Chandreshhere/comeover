@@ -3,10 +3,16 @@
 import React, { useEffect, useMemo } from 'react';
 import { View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
-import { colors } from '@/theme/tokens';
+import { colors, isDark } from '@/theme/tokens';
 import { durations } from '@/theme/motion';
 
-const PALETTE = [colors.orange, colors.pink, colors.periwinkle, colors.ink, colors.mint, colors.deep];
+// A function, not a constant: it reads the live (light/dark) palette. In dark
+// mode the pastels deepen, so the burst uses the bright accents instead. No
+// periwinkle: the celebration screens sit on a periwinkle background.
+const palette = () =>
+  isDark()
+    ? [colors.warning, colors.danger, colors.success, colors.deep, colors.ink, colors.info]
+    : [colors.orange, colors.pink, colors.ink, colors.mint, colors.deep, colors.warning];
 
 function Dot({ angle, dist, size, color, delay, burstKey, round }) {
   const p = useSharedValue(0);
@@ -28,18 +34,17 @@ function Dot({ angle, dist, size, color, delay, burstKey, round }) {
 
 export default function Confetti({ burstKey = 1, count = 26, spread = 170, style }) {
   const reduce = useReducedMotion();
-  const dots = useMemo(
-    () =>
-      Array.from({ length: count }, (_, i) => ({
-        angle: (i / count) * Math.PI * 2 + (i % 3) * 0.2,
-        dist: spread * (0.55 + ((i * 37) % 45) / 100),
-        size: 7 + (i % 4) * 2,
-        color: PALETTE[i % PALETTE.length],
-        delay: (i % 5) * 25,
-        round: i % 2 === 0,
-      })),
-    [count, spread]
-  );
+  const dots = useMemo(() => {
+    const pal = palette();
+    return Array.from({ length: count }, (_, i) => ({
+      angle: (i / count) * Math.PI * 2 + (i % 3) * 0.2,
+      dist: spread * (0.55 + ((i * 37) % 45) / 100),
+      size: 7 + (i % 4) * 2,
+      color: pal[i % pal.length],
+      delay: (i % 5) * 25,
+      round: i % 2 === 0,
+    }));
+  }, [count, spread]);
   if (reduce || !burstKey) return null;
   return (
     <View pointerEvents="none" style={[{ position: 'absolute', alignItems: 'center', justifyContent: 'center', width: 1, height: 1 }, style]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">

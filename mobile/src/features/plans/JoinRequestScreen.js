@@ -12,11 +12,11 @@ import { joinErrorCopy } from './joinActions';
 import PlanSummary from './components/PlanSummary';
 import PlanGate from './components/PlanGate';
 
+// Safety notes appear once, here, right before someone commits to meeting.
 const TIPS = [
-  { icon: 'map-pin', text: 'Meet at the listed public spot — the exact place unlocks after you’re accepted.' },
-  { icon: 'share-2', text: 'Share the plan with someone you trust.' },
+  { icon: 'map-pin', text: 'The exact spot unlocks once you’re accepted.' },
   { icon: 'log-out', text: 'You can leave any time. No explanation needed.' },
-  { icon: 'flag', text: 'Report or block from the plan or chat, whenever you need.' },
+  { icon: 'flag', text: 'Report or block from the plan or chat menu.' },
 ];
 
 export default function JoinRequestScreen() {
@@ -52,6 +52,7 @@ export default function JoinRequestScreen() {
   };
 
   const already = ['requested', 'accepted', 'checked_in'].includes(joinState);
+  const approval = a.joinRule === 'approval';
   const hostName = a.host?.name || 'the host';
 
   return (
@@ -62,13 +63,13 @@ export default function JoinRequestScreen() {
       header={<ScreenHeader title="Request to join" onBack={() => nav.goBack()} />}
       footer={
         error?.code === 'capacity_full' ? (
-          <View style={{ gap: space.xs }}>
+          <View style={{ gap: space.xxs }}>
             <Button title="Go to the waitlist" icon="list" onPress={() => nav.replace('waitlist', { id })} />
             <Button title="Find a similar plan" variant="ghost" onPress={() => nav.replace('category_results', { category: a.category })} />
           </View>
         ) : (
           <Button
-            title={already ? 'Request already sent' : a.joinRule === 'approval' ? 'Send request' : 'Join plan'}
+            title={already ? 'Request already sent' : approval ? 'Send request' : 'Join plan'}
             icon="send"
             loading={busy}
             disabled={already || error?.code === 'account_restricted'}
@@ -82,7 +83,7 @@ export default function JoinRequestScreen() {
       {error && (
         <View style={{ backgroundColor: colors.pinkSoft, borderRadius: radius.quest, padding: space.md, marginTop: space.md }} accessibilityLiveRegion="polite">
           <AppText variant="bodyStrong">{error.title}</AppText>
-          <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 2 }}>
+          <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.xxs }}>
             {error.body}
           </AppText>
         </View>
@@ -94,31 +95,15 @@ export default function JoinRequestScreen() {
         onChangeText={setIntro}
         multiline
         maxLength={140}
-        placeholder="e.g. Hey! I'm nearby and up for this — happy to join."
-        helper="Keep it short and friendly. No contact details — chat opens after you're accepted."
+        placeholder="e.g. Hey! I’m nearby and up for this."
+        helper={approval ? `${hostName} also sees your name, level and show-up rate.` : 'No contact details, please.'}
       />
 
-      <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, padding: space.md }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Icon name={a.joinRule === 'approval' ? 'user-check' : 'zap'} size={18} />
-          <AppText variant="bodyStrong" style={{ marginLeft: space.xs }}>
-            {a.joinRule === 'approval' ? 'Host approves each request' : 'Instant join'}
-          </AppText>
-        </View>
-        <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 6 }}>
-          {a.joinRule === 'approval'
-            ? `${hostName} sees your first name, level, show-up rate and intro. If accepted, the group chat and exact meeting spot unlock.`
-            : 'You’ll get the group chat and exact meeting spot straight away.'}
-          {a.cost ? ` Cost: ${a.cost}.` : ''}
-        </AppText>
-      </View>
-
-      <SectionHeader title="Before you go" />
-      <View style={{ backgroundColor: colors.periwinkleWash, borderRadius: radius.card, padding: space.md, gap: space.sm }}>
-        {TIPS.map((t) => (
-          <View key={t.icon} style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-            <Icon name={t.icon} size={16} color={colors.deep} style={{ marginTop: 2 }} />
-            <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.xs }}>
+      <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, paddingHorizontal: space.md, paddingVertical: space.sm, marginTop: space.xs }}>
+        {TIPS.map((t, i) => (
+          <View key={t.icon} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 40, borderBottomWidth: i === TIPS.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
+            <Icon name={t.icon} size={16} color={colors.deep} />
+            <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.sm }}>
               {t.text}
             </AppText>
           </View>

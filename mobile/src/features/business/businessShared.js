@@ -77,7 +77,7 @@ export async function fetchCampaigns() {
 // Paid-placement disclosure. Prefer the server's own text for the placement.
 export const sponsoredReason = (venue, area) =>
   venue?.sponsorDisclosure ||
-  `${venue?.name || 'This venue'} paid to show this to people around ${area || venue?.area || 'you'}. Paid placement can move it higher in this list, but it never skips safety checks, spam limits or relevance filters, and it never guarantees who shows up.`;
+  `${venue?.name || 'This venue'} paid to show this to people around ${area || venue?.area || 'you'}. It can rank higher, but never skips safety checks or filters.`;
 
 // Upcoming plans held at a venue: from the venue payload, else plans in the
 // app store that reference the venue id.

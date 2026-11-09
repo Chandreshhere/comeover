@@ -8,8 +8,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { colors, radius, space } from '@/theme/tokens';
+import { colors, fonts, radius, space } from '@/theme/tokens';
 import { durations, spring } from '@/theme/motion';
+import { Snowflake } from 'phosphor-react-native/src/icons/Snowflake';
 import { Pictogram } from '@/illustrations/Pictograms';
 import AppText from './AppText';
 import Icon from './Icon';
@@ -42,11 +43,11 @@ function Dot({ state, pulseKey }) {
       break;
     case 'rest':
       style = { backgroundColor: colors.lavender };
-      content = <AppText variant="caption" color={colors.inkSoft}>z</AppText>;
+      content = <Icon name="moon" size={13} color={colors.inkSoft} weight="fill" />;
       break;
     case 'freeze':
       style = { backgroundColor: colors.periwinkleWash, borderWidth: 1.5, borderColor: colors.deep };
-      content = <Icon name="shield" size={13} color={colors.deep} />;
+      content = <Snowflake size={15} color={colors.deep} weight="bold" />;
       break;
     case 'missed':
       style = { backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border };
@@ -78,9 +79,9 @@ export default function WeekStrip({ days = [], pulseKey, style }) {
         style,
       ]}
     >
-      {days.map((d) => (
-        <View key={d.label} style={{ alignItems: 'center', flex: 1 }}>
-          <AppText variant="caption" color={d.state?.startsWith('today') ? colors.ink : colors.muted} style={{ marginBottom: 6, fontFamily: d.state?.startsWith('today') ? 'Poppins-Bold' : undefined }}>
+      {days.map((d, i) => (
+        <View key={`${d.label}-${i}`} style={{ alignItems: 'center', flex: 1 }}>
+          <AppText variant="caption" color={d.state?.startsWith('today') ? colors.ink : colors.muted} numberOfLines={1} style={{ marginBottom: space.xs - 2, fontFamily: d.state?.startsWith('today') ? fonts.bold : undefined }}>
             {d.label}
           </AppText>
           <Dot state={d.state} pulseKey={pulseKey} />

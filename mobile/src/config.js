@@ -4,7 +4,7 @@
 import env from './config.env.json';
 
 export const config = {
-  // Project IRL API (Node + MongoDB). API_URL includes /v1; WS_URL is wss://<host>/ws.
+  // Come Over API (Node + MongoDB). API_URL includes /v1; WS_URL is wss://<host>/ws.
   API_URL: env.API_URL || '',
   WS_URL: env.WS_URL || '',
   MEDIA_CDN_URL: env.MEDIA_CDN_URL || '',

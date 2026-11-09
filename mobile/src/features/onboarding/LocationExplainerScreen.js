@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { MapPinArea } from 'phosphor-react-native/src/icons/MapPinArea';
 import { Button } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import { space } from '@/theme/tokens';
@@ -20,8 +21,8 @@ export default function LocationExplainerScreen() {
     <OnboardingFrame
       stepId="location_explainer"
       hero={<CoarseMapArt area={area} />}
-      title="Plans near you, privately"
-      subtitle="Location helps us show what's happening close by. Here's exactly how it's used."
+      title="Find plans nearby"
+      subtitle="We only use your rough area, never your exact spot."
       footer={
         <View>
           <Button title="Continue" onPress={() => nav.navigate('location_permission')} />
@@ -29,10 +30,9 @@ export default function LocationExplainerScreen() {
         </View>
       }
     >
-      <PointRow icon="target" title="Approximate only" body="Others see your neighbourhood and a rounded distance — never your exact spot." />
-      <PointRow icon="map-pin" title="Venue details after you're accepted" body="Hosts share the exact meeting point with their group only." />
-      <PointRow icon="pause-circle" title="No background tracking" body="We only check location while you're using the app. Turn it off any time." />
-      <PointRow icon="slash" title="Not required" body="Pick an area by hand and everything still works." />
+      <PointRow icon={MapPinArea} tone="periwinkle" title="Others see only your area" />
+      <PointRow icon="pause-circle" tone="orange" title="No background tracking" />
+      <PointRow icon="map" tone="lavender" title="Works without GPS too" />
 
       <AreaPickerSheet
         visible={picker}

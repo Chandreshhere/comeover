@@ -13,6 +13,7 @@ import LocationPermissionScreen from './LocationPermissionScreen';
 import NotificationOptInScreen from './NotificationOptInScreen';
 import SafetyIntroScreen from './SafetyIntroScreen';
 import FirstPlanPromptScreen from './FirstPlanPromptScreen';
+import SocialStyleScreen from './SocialStyleScreen';
 
 export const screens = {
   boot_splash: BootSplashScreen,
@@ -29,6 +30,7 @@ export const screens = {
   notification_opt_in: NotificationOptInScreen,
   safety_intro: SafetyIntroScreen,
   first_plan_prompt: FirstPlanPromptScreen,
+  social_style: SocialStyleScreen,
 };
 
 // Splash and welcome shouldn't be swiped back into once left.
@@ -37,4 +39,8 @@ export const options = {
   welcome: { animation: 'fade', gestureEnabled: false },
   service_status: { gestureEnabled: false },
   first_plan_prompt: { gestureEnabled: false },
+  social_style: { gestureEnabled: false }, // the screen re-enables it for edit / prompt mode
 };
+
+// Accounts that never answered are asked BEFORE home (sign-in and first screen
+// route to social_style), never popped over the dashboard.

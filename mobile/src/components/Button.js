@@ -1,7 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
-import { colors, layout, radius, shadow } from '@/theme/tokens';
+import { colors, inkAlpha, layout, radius, shadow } from '@/theme/tokens';
 import { durations, spring } from '@/theme/motion';
 import haptics from '@/utils/haptics';
 import AppText from './AppText';
@@ -9,14 +9,15 @@ import Icon from './Icon';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-const VARIANTS = {
+// Functions, not constants: they read the live (light/dark) palette.
+const variants = () => ({
   primary: { bg: colors.ink, fg: colors.white, border: colors.ink },
   secondary: { bg: colors.surface, fg: colors.ink, border: colors.border },
   light: { bg: colors.white, fg: colors.ink, border: colors.white },
   periwinkle: { bg: colors.periwinkle, fg: colors.ink, border: colors.periwinkle },
   ghost: { bg: 'transparent', fg: colors.ink, border: 'transparent' },
-  danger: { bg: colors.danger, fg: colors.white, border: colors.danger },
-};
+  danger: { bg: colors.danger, fg: colors.pureWhite, border: colors.danger },
+});
 
 // Scale-on-press helper shared by every tappable surface (pressed_scale_0.98).
 export function usePressScale(to = 0.98) {
@@ -44,10 +45,12 @@ export default function Button({
   disabled = false,
   caps = false,
   full = true,
+  align = 'start', // when not full width: 'start' | 'center' | 'end'
   style,
   accessibilityLabel,
 }) {
-  const v = VARIANTS[variant] || VARIANTS.primary;
+  const all = variants();
+  const v = all[variant] || all.primary;
   const press = usePressScale();
   const height = size === 'sm' ? 40 : size === 'xs' ? 32 : layout.buttonHeight;
   const isDisabled = disabled || loading;
@@ -72,7 +75,7 @@ export default function Button({
           backgroundColor: v.bg,
           borderColor: v.border,
           paddingHorizontal: size === 'md' ? 24 : 16,
-          alignSelf: full ? 'stretch' : 'flex-start',
+          alignSelf: full ? 'stretch' : align === 'center' ? 'center' : align === 'end' ? 'flex-end' : 'flex-start',
           opacity: disabled ? 0.4 : 1,
         },
         variant === 'light' && shadow.card,
@@ -95,16 +98,17 @@ export default function Button({
   );
 }
 
-const ICON_VARIANTS = {
+const iconVariants = () => ({
   surface: { bg: colors.surface, fg: colors.ink, border: colors.border },
-  glass: { bg: colors.glass, fg: colors.ink, border: 'rgba(9,10,14,0.18)' },
+  glass: { bg: colors.glass, fg: colors.ink, border: inkAlpha(0.18) },
   ink: { bg: colors.ink, fg: colors.white, border: colors.ink },
   periwinkle: { bg: colors.periwinkle, fg: colors.ink, border: colors.periwinkle },
   plain: { bg: 'transparent', fg: colors.ink, border: 'transparent' },
-};
+});
 
 export function IconButton({ icon, onPress, variant = 'surface', size = layout.iconButton, badge, accessibilityLabel, style, iconSize, children }) {
-  const v = ICON_VARIANTS[variant] || ICON_VARIANTS.surface;
+  const all = iconVariants();
+  const v = all[variant] || all.surface;
   const press = usePressScale(0.94);
   return (
     <AnimatedPressable
@@ -133,7 +137,7 @@ export function IconButton({ icon, onPress, variant = 'surface', size = layout.i
       ]}
     >
       {children || <Icon name={icon} size={iconSize || Math.round(size * 0.42)} color={v.fg} />}
-      {badge ? <View style={styles.badge} /> : null}
+      {badge ? <View style={[styles.badge, { backgroundColor: colors.danger, borderColor: colors.surface }]} /> : null}
     </AnimatedPressable>
   );
 }
@@ -153,8 +157,6 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: colors.danger,
     borderWidth: 1.5,
-    borderColor: colors.white,
   },
 });

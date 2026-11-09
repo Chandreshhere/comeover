@@ -15,6 +15,7 @@ export const INVENTORY = [
   ['notification_opt_in', 'Onboarding', 'notification/opt/in'],
   ['safety_intro', 'Onboarding', 'safety/intro'],
   ['first_plan_prompt', 'Onboarding', 'first/plan/prompt'],
+  ['social_style', 'Onboarding', 'social/style'],
   ['discover_home', 'Core', 'discover/home'],
   ['discover_search', 'Discovery', 'discover/search'],
   ['category_results', 'Discovery', 'category/results'],

@@ -9,28 +9,34 @@ import AppText from './AppText';
 import Icon from './Icon';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const CHIP_HEIGHT = layout.chipHeight + 4;
 
-// Category / filter pill. `pictogram` takes an activity glyph name; `icon` a Feather name.
-export default function Chip({ label, selected = false, onPress, pictogram, icon, tone = 'surface', style, count }) {
-  const press = usePressScale(0.96);
+// Category / filter pill. `pictogram` takes an activity glyph name; `icon` an
+// app icon name; `glyph` a Phosphor component (for glyphs outside the map).
+// `fill`: stretch to the parent's width with centred content (use inside ChipGrid).
+export default function Chip({ label, selected = false, onPress, pictogram, icon, glyph: Glyph, tone = 'surface', style, count, accessibilityLabel, fill = false }) {
+  const press = usePressScale(0.95);
   const bg = selected ? colors.ink : tone === 'glass' ? colors.glass : colors.surface;
   const fg = selected ? colors.white : colors.inkSoft;
   return (
     <AnimatedPressable
       accessibilityRole="button"
       accessibilityState={{ selected }}
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel || (count != null ? `${label}, ${count}` : label)}
       onPress={() => {
         haptics.select();
         onPress?.();
       }}
       onPressIn={press.onPressIn}
       onPressOut={press.onPressOut}
+      hitSlop={(layout.minTouch - CHIP_HEIGHT) / 2}
       style={[
         {
-          height: layout.chipHeight + 4,
+          height: CHIP_HEIGHT,
+          maxWidth: '100%',
           borderRadius: radius.pill,
           paddingHorizontal: 14,
+          ...(fill ? { alignSelf: 'stretch', justifyContent: 'center' } : null),
           flexDirection: 'row',
           alignItems: 'center',
           backgroundColor: bg,
@@ -41,13 +47,14 @@ export default function Chip({ label, selected = false, onPress, pictogram, icon
         style,
       ]}
     >
-      {pictogram && (
+      {!!pictogram && (
         <View style={{ marginRight: 6 }}>
-          <Pictogram name={pictogram} size={18} color={fg} />
+          <Pictogram name={pictogram} size={18} color={fg} duotoneOpacity={selected ? 0.4 : 0.28} />
         </View>
       )}
-      {icon && <Icon name={icon} size={15} color={fg} style={{ marginRight: 6 }} />}
-      <AppText variant="label" color={fg}>
+      {!!Glyph && <Glyph size={15} color={fg} weight="bold" style={{ marginRight: 6 }} />}
+      {!!icon && !Glyph && <Icon name={icon} size={15} color={fg} style={{ marginRight: 6 }} />}
+      <AppText variant="label" color={fg} numberOfLines={1} style={{ flexShrink: 1 }}>
         {label}
       </AppText>
       {count != null && (
@@ -65,7 +72,7 @@ export function ChipRow({ children, style, contentStyle }) {
       horizontal
       showsHorizontalScrollIndicator={false}
       style={style}
-      contentContainerStyle={[{ paddingHorizontal: layout.screenPadding, gap: space.xs }, contentStyle]}
+      contentContainerStyle={[{ paddingHorizontal: layout.screenPadding, gap: space.xs, alignItems: 'center' }, contentStyle]}
     >
       {children}
     </ScrollView>
@@ -73,16 +80,27 @@ export function ChipRow({ children, style, contentStyle }) {
 }
 
 // Small static label pill, e.g. "Public venue", "Sponsored", "Host-approved".
-export function Tag({ label, bg = colors.surfaceSubtle, fg = colors.inkSoft, icon, style }) {
+// `glyph` takes a Phosphor component for icons outside the app icon map.
+export function Tag({ label, bg = colors.surfaceSubtle, fg = colors.inkSoft, icon, glyph: Glyph, style }) {
   return (
     <View
       style={[
-        { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', backgroundColor: bg, borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4 },
+        {
+          flexDirection: 'row',
+          alignItems: 'center',
+          alignSelf: 'flex-start',
+          maxWidth: '100%',
+          backgroundColor: bg,
+          borderRadius: radius.pill,
+          paddingHorizontal: 10,
+          paddingVertical: space.xxs,
+        },
         style,
       ]}
     >
-      {icon && <Icon name={icon} size={12} color={fg} style={{ marginRight: 4 }} />}
-      <AppText variant="caption" color={fg}>
+      {!!Glyph && <Glyph size={12} color={fg} weight="bold" style={{ marginRight: space.xxs }} />}
+      {!!icon && !Glyph && <Icon name={icon} size={12} color={fg} style={{ marginRight: space.xxs }} />}
+      <AppText variant="caption" color={fg} numberOfLines={1} style={{ flexShrink: 1 }}>
         {label}
       </AppText>
     </View>

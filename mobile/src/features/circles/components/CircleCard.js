@@ -1,52 +1,55 @@
 import React from 'react';
 import { View } from 'react-native';
-import { AppText, AvatarStack, Button, Card, Icon, Pictogram, Tag } from '@/components';
-import { accents, colors, radius, space } from '@/theme/tokens';
+import { AppText, Button, Card, Icon, Pictogram } from '@/components';
+import { accents, colors, space } from '@/theme/tokens';
 import { whenLabel } from '@/utils/format';
 
 export const circleAccent = (c) => accents[(c?.accentIndex ?? 0) % accents.length].bg;
 
-// Circle list card: pastel pictogram tile, name, members/area, next plan and join.
+const TILE = 52;
+
+// Circle list card: one aligned row. Pastel pictogram tile, name, one meta
+// line (members · area) and, when there is one, the next plan. Right slot is
+// "Join" for circles you're not in, otherwise a chevron (the card navigates).
 export default function CircleCard({ circle: c, nextPlan, joined, joining = false, onPress, onJoin, style }) {
+  const meta = [`${c.members ?? 0} members`, c.area].filter(Boolean).join(' · ');
   return (
     <Card
       onPress={onPress}
       elevated={false}
-      padding={14}
-      style={[{ borderWidth: 1.2, borderColor: colors.border }, style]}
-      accessibilityLabel={`${c.name}. ${c.members} members in ${c.area}.${nextPlan ? ` Next plan: ${nextPlan.title}.` : ''}${joined ? ' Joined.' : ''}`}
+      padding={space.md}
+      style={[{ borderWidth: 1.2, borderColor: colors.border, minHeight: TILE + 2 * space.md }, style]}
+      accessibilityLabel={`${c.name}. ${c.members ?? 0} members${c.area ? ` in ${c.area}` : ''}.${nextPlan ? ` Next plan: ${nextPlan.title}, ${whenLabel(nextPlan.startsAt)}.` : ''}${joined ? ' Joined.' : ''}`}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <View style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: circleAccent(c), alignItems: 'center', justifyContent: 'center' }}>
-          <Pictogram name={c.pictogram} size={30} />
+        <View style={{ width: TILE, height: TILE, borderRadius: 16, backgroundColor: circleAccent(c), alignItems: 'center', justifyContent: 'center' }}>
+          <Pictogram name={c.pictogram} size={28} color={colors.ink} />
         </View>
-        <View style={{ flex: 1, marginLeft: space.sm }}>
+        <View style={{ flex: 1, marginHorizontal: space.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <AppText variant="bodyStrong" numberOfLines={1} style={{ flexShrink: 1 }}>
               {c.name}
             </AppText>
-            {c.visibility === 'private' && <Icon name="lock" size={12} color={colors.muted} style={{ marginLeft: 4 }} />}
+            {c.visibility === 'private' && <Icon name="lock" size={13} color={colors.muted} style={{ marginLeft: space.xxs }} />}
           </View>
-          <AppText variant="caption" color={colors.muted} numberOfLines={1}>
-            {c.members ?? 0} members{c.area ? ` · ${c.area}` : ''}
+          <AppText variant="caption" color={colors.muted} numberOfLines={1} style={{ marginTop: 2 }}>
+            {meta}
           </AppText>
-          <View style={{ marginTop: 6 }}>
-            <AvatarStack seeds={c.memberSeeds || []} size={22} max={4} extra={Math.max(0, (c.members || 0) - (c.memberSeeds?.length || 0))} />
-          </View>
+          {nextPlan ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.xxs }}>
+              <Icon name="calendar" size={12} color={colors.deep} />
+              <AppText variant="caption" color={colors.inkSoft} numberOfLines={1} style={{ flex: 1, marginLeft: space.xxs }}>
+                {whenLabel(nextPlan.startsAt)} · {nextPlan.title}
+              </AppText>
+            </View>
+          ) : null}
         </View>
-        {onJoin && (
-          <Button title={joined ? 'Joined' : 'Join'} size="xs" variant={joined ? 'secondary' : 'primary'} icon={joined ? 'check' : undefined} full={false} loading={joining} onPress={onJoin} accessibilityLabel={joined ? `${c.name}, joined` : `Join ${c.name}`} />
+        {onJoin ? (
+          <Button title="Join" size="xs" full={false} loading={joining} onPress={onJoin} accessibilityLabel={`Join ${c.name}`} />
+        ) : (
+          <Icon name="chevron-right" size={18} color={colors.muted} />
         )}
       </View>
-      {nextPlan && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceSubtle, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 8, marginTop: space.sm }}>
-          <Pictogram name={nextPlan.pictogram} size={16} />
-          <AppText variant="caption" numberOfLines={1} style={{ flex: 1, marginLeft: 6 }}>
-            Next: {nextPlan.title}
-          </AppText>
-          <Tag label={whenLabel(nextPlan.startsAt)} bg={colors.surface} />
-        </View>
-      )}
     </Card>
   );
 }

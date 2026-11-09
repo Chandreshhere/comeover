@@ -1,12 +1,17 @@
-// Shared layout for onboarding steps: back button, step progress, editorial
-// title + subtitle, scrollable body and a sticky primary-CTA footer.
+// Shared layout for onboarding steps: back button, step progress, one title
+// (the step's single question) + one subtitle line, a scrollable body and a
+// sticky footer holding the step's one primary action.
 import React from 'react';
 import { Pressable, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Icon, IconButton, ProgressBar, Screen } from '@/components';
-import { colors, layout, radius, space } from '@/theme/tokens';
+import { AppText, Icon, IconButton, ProgressBar, Screen, usePressScale } from '@/components';
+import { colors, glass, layout, radius, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
+import haptics from '@/utils/haptics';
+import IconBubble from '@/features/system/IconBubble';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export const STEPS = {
   phone_entry: 1,
@@ -20,14 +25,20 @@ export const STEPS = {
   notification_opt_in: 8,
   safety_intro: 9,
   first_plan_prompt: 10,
+  social_style: 11,
 };
-export const TOTAL_STEPS = 10;
+export const TOTAL_STEPS = 11;
+
+// The brand hero background (flat periwinkle) gets the frosted "glass" header
+// treatment. Read at render time so it matches the live light/dark value.
+const isHeroBg = (bg) => bg === colors.periwinkle;
 
 export function StepHeader({ step, onBack, back = true, tone = 'surface', right }) {
   const nav = useNavigation();
+  const onGlass = tone === 'glass';
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: layout.screenPadding, paddingTop: space.xs, paddingBottom: space.xs, minHeight: 60 }}>
-      <View style={{ width: 44 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: layout.screenPadding, paddingVertical: space.xs, minHeight: 60 }}>
+      <View style={{ width: layout.iconButton }}>
         {back && (
           <IconButton
             icon="arrow-left"
@@ -37,22 +48,19 @@ export function StepHeader({ step, onBack, back = true, tone = 'surface', right 
           />
         )}
       </View>
+      {/* A thin progress bar centred on the back button's axis; the step count
+          is announced to screen readers instead of printed. */}
       <View style={{ flex: 1, paddingHorizontal: space.md }}>
         {step ? (
-          <>
-            <ProgressBar
-              value={step / TOTAL_STEPS}
-              height={6}
-              track={tone === 'glass' ? 'rgba(255,255,255,0.55)' : colors.track}
-              accessibilityLabel={`Step ${step} of ${TOTAL_STEPS}`}
-            />
-            <AppText variant="caption" color={tone === 'glass' ? colors.inkSoft : colors.muted} align="center" style={{ marginTop: 4 }}>
-              Step {step} of {TOTAL_STEPS}
-            </AppText>
-          </>
+          <ProgressBar
+            value={step / TOTAL_STEPS}
+            height={6}
+            track={onGlass ? glass(0.55) : colors.track}
+            accessibilityLabel={`Step ${step} of ${TOTAL_STEPS}`}
+          />
         ) : null}
       </View>
-      <View style={{ width: 44, alignItems: 'flex-end' }}>{right}</View>
+      <View style={{ width: layout.iconButton, alignItems: 'flex-end' }}>{right}</View>
     </View>
   );
 }
@@ -73,7 +81,7 @@ export default function OnboardingFrame({
   scroll = true,
 }) {
   const s = step ?? (stepId ? STEPS[stepId] : undefined);
-  const tone = bg === colors.periwinkle ? 'glass' : 'surface';
+  const tone = isHeroBg(bg) ? 'glass' : 'surface';
   return (
     <Screen
       bg={bg}
@@ -82,7 +90,7 @@ export default function OnboardingFrame({
       header={<StepHeader step={s} back={back} onBack={onBack} tone={tone} right={headerRight} />}
       footer={footer}
     >
-      {hero ? <Animated.View entering={enter(0)}>{hero}</Animated.View> : null}
+      {hero ? <Animated.View entering={enter(0)} style={{ marginTop: space.xs }}>{hero}</Animated.View> : null}
       {!!title && (
         <Animated.View entering={enter(1)}>
           <AppText variant="display" style={{ marginTop: hero ? space.lg : space.md }} accessibilityRole="header">
@@ -97,32 +105,40 @@ export default function OnboardingFrame({
           </AppText>
         </Animated.View>
       )}
-      <Animated.View entering={enter(3)} style={{ marginTop: space.lg }}>
+      <Animated.View entering={enter(3)} style={{ marginTop: space.xl }}>
         {children}
       </Animated.View>
     </Screen>
   );
 }
 
-// Accessible checkbox row used for attestations and consent.
+// Accessible checkbox row used for attestations and consent. Springs on press.
 export function CheckRow({ checked, onToggle, label, sublabel, style }) {
+  const press = usePressScale(0.98);
   return (
-    <Pressable
-      onPress={onToggle}
+    <AnimatedPressable
+      onPress={() => {
+        haptics.select();
+        onToggle?.();
+      }}
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
       accessibilityRole="checkbox"
       accessibilityState={{ checked }}
       accessibilityLabel={label}
+      accessibilityHint={sublabel}
       style={[
         {
           flexDirection: 'row',
           alignItems: 'flex-start',
-          backgroundColor: colors.surface,
-          borderRadius: 20,
+          backgroundColor: checked ? colors.periwinkleWash : colors.surface,
+          borderRadius: radius.card,
           borderWidth: 1.2,
           borderColor: checked ? colors.ink : colors.border,
           padding: space.md,
           marginBottom: space.xs,
         },
+        press.style,
         style,
       ]}
     >
@@ -130,14 +146,14 @@ export function CheckRow({ checked, onToggle, label, sublabel, style }) {
         style={{
           width: 26,
           height: 26,
-          borderRadius: 8,
+          borderRadius: 9,
           borderWidth: 2,
           borderColor: colors.ink,
           backgroundColor: checked ? colors.ink : colors.surface,
           alignItems: 'center',
           justifyContent: 'center',
           marginRight: space.sm,
-          marginTop: 1,
+          marginTop: -2, // centre on the first 22pt line of the label
         }}
       >
         {checked && <Icon name="check" size={16} color={colors.white} />}
@@ -150,21 +166,22 @@ export function CheckRow({ checked, onToggle, label, sublabel, style }) {
           </AppText>
         )}
       </View>
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
-// White point row with icon bubble (value props, safety principles).
-export function PointRow({ icon, title, body, bubble = colors.periwinkleWash, style }) {
+// Point row with a duotone icon in a pastel bubble (value props, safety
+// principles). `tone` picks a bubble palette (periwinkle | mint | lavender |
+// orange | pink); `bubble` (a colour) is still honoured for older call sites.
+// `icon` takes an icon name or a Phosphor component.
+export function PointRow({ icon, title, body, bubble, tone = 'periwinkle', style }) {
   return (
     <View
       accessible
-      accessibilityLabel={`${title}. ${body || ''}`}
-      style={[{ flexDirection: 'row', alignItems: 'flex-start', backgroundColor: colors.surface, borderRadius: radius.card, padding: space.md, marginBottom: space.xs }, style]}
+      accessibilityLabel={body ? `${title}. ${body}` : title}
+      style={[{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.card, padding: space.md, marginBottom: space.xs }, style]}
     >
-      <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: bubble, alignItems: 'center', justifyContent: 'center', marginRight: space.sm }}>
-        <Icon name={icon} size={19} color={colors.ink} />
-      </View>
+      <IconBubble icon={icon} tone={tone} size={44} iconSize={22} style={[{ marginRight: space.sm }, bubble ? { backgroundColor: bubble } : null]} />
       <View style={{ flex: 1 }}>
         <AppText variant="bodyStrong">{title}</AppText>
         {!!body && (

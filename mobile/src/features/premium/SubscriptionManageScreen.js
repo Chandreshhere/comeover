@@ -1,31 +1,36 @@
 // subscription_manage — entitlement state (GET /me/subscription), renewal,
 // restore (store purchases → POST /subscriptions/restore) and store management.
-import React, { useMemo, useState } from 'react';
+// One status card, one list of actions, what the plan includes.
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { AppText, Button, Card, HeroCard, Icon, ListGroup, ListRow, Pictogram, QueryState, Screen, ScreenHeader, SectionHeader, Tag } from '@/components';
-import { colors, radius, space } from '@/theme/tokens';
+import { colors, glass, radius, space } from '@/theme/tokens';
 import { enter, fadeIn } from '@/theme/motion';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
 import { manageSubscriptionsUrl, restore } from '@/services/billing';
-import { NEVER_GATED, shortDate, storeName, usePlans } from './plans';
+import { shortDate, storeName, usePlans } from './plans';
+import { BenefitRow, toneColors } from './PaywallParts';
 
-// Entitlement states the server can report.
-const STATE_COPY = {
-  free: { label: 'Free', bg: colors.surfaceSubtle, fg: colors.inkSoft, body: 'You have every core feature. Upgrade only if a paid tool helps you.' },
-  active: { label: 'Active', bg: colors.mint, fg: colors.ink, body: 'Renews automatically through your store account.' },
-  pending: { label: 'Pending', bg: colors.orangeSoft, fg: colors.ink, body: 'Waiting for the store to confirm payment. Features unlock as soon as it clears.' },
-  grace: { label: 'Payment issue', bg: colors.orangeSoft, fg: colors.ink, body: 'Your store couldn’t renew the subscription. Features stay on during the grace period — update your payment method in store settings.' },
-  expired: { label: 'Expired', bg: colors.surfaceSubtle, fg: colors.inkSoft, body: 'Paid features are paused. Everything free keeps working, and your data is kept.' },
-  refunded: { label: 'Refunded', bg: colors.surfaceSubtle, fg: colors.inkSoft, body: 'This purchase was refunded, so paid features are off. Free features are unaffected.' },
-  cancelled: { label: 'Cancelled', bg: colors.surfaceSubtle, fg: colors.inkSoft, body: 'Auto-renew is off. Paid features stay on until the end of the period you paid for.' },
-};
+// Entitlement states the server can report. A function so the colours follow
+// the live (light/dark) palette.
+const stateCopy = () => ({
+  free: { label: 'Free', bg: colors.surfaceSubtle, fg: colors.inkSoft, body: 'Every core feature is yours, free.' },
+  active: { label: 'Active', bg: colors.mint, fg: colors.ink, body: null },
+  pending: { label: 'Pending', bg: colors.orangeSoft, fg: colors.ink, body: 'Features unlock once the store confirms payment.' },
+  grace: { label: 'Payment issue', bg: colors.orangeSoft, fg: colors.ink, body: 'Renewal failed. Update your payment in store settings.' },
+  expired: { label: 'Expired', bg: colors.surfaceSubtle, fg: colors.inkSoft, body: 'Paid features are paused. Free ones still work.' },
+  refunded: { label: 'Refunded', bg: colors.surfaceSubtle, fg: colors.inkSoft, body: 'Refunded, so paid features are off.' },
+  cancelled: { label: 'Cancelled', bg: colors.surfaceSubtle, fg: colors.inkSoft, body: 'Auto-renew is off. Features stay on until then.' },
+});
+const STATES = ['free', 'active', 'pending', 'grace', 'expired', 'refunded', 'cancelled'];
 
 function entitlementState(sub) {
   if (!sub || (!sub.status && (!sub.tier || sub.tier === 'free'))) return 'free';
-  if (STATE_COPY[sub.status] && sub.status !== 'active') return sub.status;
+  if (sub.status === 'revoked') return 'refunded';
+  if (STATES.includes(sub.status) && sub.status !== 'active') return sub.status;
   if (sub.expiresAt && new Date(sub.expiresAt).getTime() < Date.now()) return 'expired';
   if (sub.tier && sub.tier !== 'free') return 'active';
   return 'free';
@@ -35,6 +40,7 @@ const STORE_LABEL = { apple: 'App Store', google: 'Google Play', web: 'web' };
 
 export default function SubscriptionManageScreen() {
   const nav = useNavigation();
+  const { params = {} } = useRoute();
   const subscription = useAppStore((s) => s.subscription);
   const setSubscription = useAppStore((s) => s.setSubscription);
   const subL = useLoader('subscription', (s) => s.loadSubscription());
@@ -43,7 +49,7 @@ export default function SubscriptionManageScreen() {
   const [notice, setNotice] = useState(null);
 
   const state = entitlementState(subscription);
-  const copy = STATE_COPY[state];
+  const copy = stateCopy()[state];
   const paidFeaturesOn = ['active', 'grace', 'cancelled'].includes(state);
   const plan = useMemo(() => (paidFeaturesOn ? plans.byId(subscription.tier) : plans.byId('free')), [paidFeaturesOn, plans, subscription.tier]);
   const freePlan = plans.byId('free');
@@ -81,11 +87,28 @@ export default function SubscriptionManageScreen() {
       ? `Ended ${shortDate(subscription.expiresAt)}`
       : null;
 
-  const features = (paidFeaturesOn ? plan?.features : freePlan?.features) || [];
+  // "Restore purchases" from the plans page / checkout lands here and runs once.
+  const autoRestored = useRef(false);
+  useEffect(() => {
+    if (params.restore && !autoRestored.current) {
+      autoRestored.current = true;
+      doRestore();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.restore]);
+
+  const features = (paidFeaturesOn ? plan?.featureItems : freePlan?.featureItems) || [];
+  const tone = toneColors(plan?.tier === 'pro' ? 'orange' : plan?.tier === 'plus' ? 'periwinkle' : 'mint');
+  const price = state === 'active' && plan?.productId ? plans.storePrice(plan) : null;
+
+  const billedBy = subscription.store && state !== 'free' ? STORE_LABEL[subscription.store] || subscription.store : null;
+  const meta = [dateLine, price ? `${price}/month` : null, billedBy].filter(Boolean).join(' · ');
+  const isFree = state === 'free';
 
   return (
     <Screen
       header={<ScreenHeader title="Subscription" />}
+      footer={isFree ? <Button title="See Plus & Pro" icon="star" onPress={() => nav.navigate('premium_compare')} /> : undefined}
       refreshControl={
         <RefreshControl
           refreshing={subL.refreshing || plans.refreshing}
@@ -97,36 +120,29 @@ export default function SubscriptionManageScreen() {
         />
       }
     >
-      <QueryState status={subL.status} error={subL.error} hasData={subL.status === 'ready' || !!subscription.status || subscription.tier !== 'free'} onRetry={subL.reload} skeletonRows={1} skeletonHeight={170} style={{ marginTop: space.md }}>
+      {/* Status */}
+      <QueryState status={subL.status} error={subL.error} hasData={subL.status === 'ready' || !!subscription.status || subscription.tier !== 'free'} onRetry={subL.reload} skeletonRows={1} skeletonHeight={120} style={{ marginTop: space.sm }}>
         <Animated.View entering={enter(0)}>
-          <HeroCard style={{ marginTop: space.md }}>
+          <HeroCard style={{ marginTop: space.sm }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' }}>
-                <Pictogram name={plan?.pictogram || 'people'} size={28} color={colors.white} />
+              <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: glass(0.7), alignItems: 'center', justifyContent: 'center' }}>
+                <Pictogram name={plan?.pictogram || 'people'} size={28} color={colors.ink} duotoneColor={tone.duo} duotoneOpacity={0.7} />
               </View>
-              <View style={{ flex: 1, marginLeft: space.sm }}>
-                <AppText variant="caption" color={colors.inkSoft}>
-                  Current plan
+              <View style={{ flex: 1, marginHorizontal: space.sm }}>
+                <AppText variant="h2" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                  {paidFeaturesOn ? `Come Over ${plan?.name || subscription.tier}` : 'Free'}
                 </AppText>
-                <AppText variant="h1">{paidFeaturesOn ? `IRL ${plan?.name || subscription.tier}` : 'Free'}</AppText>
+                {!!meta && (
+                  <AppText variant="caption" color={colors.inkSoft} numberOfLines={2} style={{ marginTop: 2 }}>
+                    {meta}
+                  </AppText>
+                )}
               </View>
-              <Tag label={copy.label} bg={copy.bg} fg={copy.fg} />
+              <Tag label={copy.label} bg={copy.bg} fg={copy.fg} style={{ alignSelf: 'center' }} />
             </View>
-            {dateLine && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm }}>
-                <Icon name="calendar" size={14} />
-                <AppText variant="label" style={{ marginLeft: 6 }}>
-                  {dateLine}
-                  {state === 'active' && plan?.productId ? ` · ${plans.priceLabel(plan)}/month` : ''}
-                </AppText>
-              </View>
-            )}
-            <AppText color={colors.inkSoft} style={{ marginTop: space.sm }} accessibilityLiveRegion="polite">
-              {copy.body}
-            </AppText>
-            {subscription.store && state !== 'free' && (
-              <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 6 }}>
-                Billed by {STORE_LABEL[subscription.store] || subscription.store}
+            {!!copy.body && (
+              <AppText color={colors.inkSoft} style={{ marginTop: space.sm }} accessibilityLiveRegion="polite">
+                {copy.body}
               </AppText>
             )}
           </HeroCard>
@@ -136,15 +152,16 @@ export default function SubscriptionManageScreen() {
       {notice && (
         <Animated.View entering={fadeIn()} accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: notice.ok ? colors.mint : colors.surface, borderRadius: radius.quest, padding: space.sm, marginTop: space.md }}>
           <Icon name={notice.ok ? 'check-circle' : 'info'} size={18} />
-          <AppText variant="label" style={{ marginLeft: 8, flex: 1 }}>
+          <AppText variant="label" style={{ marginLeft: space.xs, flex: 1 }}>
             {notice.text}
           </AppText>
         </Animated.View>
       )}
 
+      {/* Actions */}
       <SectionHeader title="Manage" />
       <ListGroup>
-        {state !== 'free' && (
+        {!isFree && (
           <ListRow
             icon="external-link"
             title={`Manage in ${storeName()}`}
@@ -152,37 +169,27 @@ export default function SubscriptionManageScreen() {
             onPress={() => Linking.openURL(manageSubscriptionsUrl()).catch(() => setNotice({ ok: false, text: `Open ${storeName()} › Subscriptions to manage your plan.` }))}
           />
         )}
-        <ListRow icon="refresh-cw" title={restoring ? 'Restoring…' : 'Restore purchases'} subtitle={`Re-link a purchase made with this ${storeName()} account`} onPress={restoring ? undefined : doRestore} />
-        <ListRow icon="layers" title="Compare plans" onPress={() => nav.navigate('premium_compare')} last />
+        <ListRow icon="refresh-cw" title={restoring ? 'Restoring…' : 'Restore purchases'} onPress={restoring ? undefined : doRestore} last={isFree} />
+        {!isFree && <ListRow icon="layers" title="Compare plans" onPress={() => nav.navigate('premium_compare')} last />}
       </ListGroup>
 
+      {/* What's included */}
       {features.length > 0 && (
         <>
-          <SectionHeader title={paidFeaturesOn ? `What ${plan?.name || 'your plan'} includes` : 'What you have now'} />
+          <SectionHeader title={paidFeaturesOn ? 'Included' : 'Included free'} />
           <Card>
-            {features.map((f) => (
-              <View key={f} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 5 }}>
-                <Icon name="check" size={16} color={colors.success} style={{ marginTop: 3 }} />
-                <AppText style={{ marginLeft: 8, flex: 1 }}>{f}</AppText>
-              </View>
+            {features.map((f, i) => (
+              <BenefitRow key={f.key} item={f} compact style={{ paddingVertical: space.xxs, borderTopWidth: i ? 1 : 0, borderTopColor: colors.border }} />
             ))}
           </Card>
         </>
       )}
 
-      <View style={{ backgroundColor: colors.surface, borderRadius: radius.quest, padding: space.md, marginTop: space.md }}>
-        <AppText variant="label">Always free</AppText>
-        <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 4 }}>
-          {NEVER_GATED.map((g) => g.label).join(' · ')}
-        </AppText>
-      </View>
-
       {state === 'active' && (
         <AppText variant="caption" color={colors.muted} style={{ marginTop: space.md }}>
-          Cancelling in {storeName()} keeps {plan?.name || 'your plan'} until the end of the paid period. Refunds are handled by {storeName()} under its policies.
+          Cancelling keeps {plan?.name || 'your plan'} until the paid period ends. Refunds are handled by {storeName()}.
         </AppText>
       )}
-      {state === 'free' && <Button title="See paid plans" variant="secondary" style={{ marginTop: space.lg }} onPress={() => nav.navigate('premium_compare')} />}
     </Screen>
   );
 }

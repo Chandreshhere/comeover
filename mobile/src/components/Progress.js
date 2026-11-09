@@ -7,7 +7,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import Svg, { Circle } from 'react-native-svg';
-import { colors, radius } from '@/theme/tokens';
+import { colors, inkAlpha, radius } from '@/theme/tokens';
 import { durations, easeOut } from '@/theme/motion';
 import AppText from './AppText';
 
@@ -33,7 +33,7 @@ export function ProgressBar({ value = 0, height = 7, track = colors.track, fill 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 // Circular capacity / quest ring with a centred "2/3" label, as in the reference.
-export function ProgressRing({ value = 0, size = 40, stroke = 3, color = colors.ink, track = 'rgba(9,10,14,0.15)', label, labelColor = colors.ink }) {
+export function ProgressRing({ value = 0, size = 40, stroke = 3, color = colors.ink, track = inkAlpha(0.15), label, labelColor = colors.ink }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const p = useSharedValue(0);

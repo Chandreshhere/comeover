@@ -1,18 +1,56 @@
 // circle_members — member list with roles and moderation actions.
 import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { AppText, Avatar, Button, Icon, ListRow, ProgressBar, QueryState, Screen, ScreenHeader, SearchBar, Sheet, Tag } from '@/components';
+import { AppText, Avatar, Icon, ListGroup, ListRow, QueryState, Screen, ScreenHeader, SearchBar, Sheet, Tag, usePressScale } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
-import { colors, radius, space } from '@/theme/tokens';
+import { colors, space } from '@/theme/tokens';
 import { ROLE_LABEL, sortMembers } from './circleUtils';
 
-const ROLE_TAG = {
-  owner: { bg: colors.ink, fg: colors.white },
-  moderator: { bg: colors.periwinkle, fg: colors.ink },
-  member: { bg: colors.surfaceSubtle, fg: colors.inkSoft },
-};
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+// A function so the tag colours follow light/dark mode.
+const roleTag = (role) =>
+  ({
+    owner: { bg: colors.ink, fg: colors.white, icon: 'crown' },
+    moderator: { bg: colors.periwinkleWash, fg: colors.ink, icon: 'shield' },
+  }[role] || null);
+
+function MemberRow({ m, isLast, avatarSeed, avatarUri, onPress }) {
+  const press = usePressScale(0.98);
+  const me = m.id === 'me';
+  const tag = roleTag(m.role);
+  return (
+    <AnimatedPressable
+      onPress={onPress}
+      onPressIn={me ? undefined : press.onPressIn}
+      onPressOut={me ? undefined : press.onPressOut}
+      disabled={me}
+      accessibilityRole="button"
+      accessibilityLabel={`${m.name}, ${ROLE_LABEL[m.role] || 'Member'}`}
+      accessibilityHint={me ? undefined : 'Opens member options'}
+      style={[{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: isLast ? 0 : 1, borderBottomColor: colors.border, minHeight: 64 }, press.style]}
+    >
+      <Avatar seed={me ? avatarSeed : m.id} uri={me ? avatarUri : m.avatarUrl} size={40} />
+      <View style={{ flex: 1, marginHorizontal: space.sm }}>
+        <AppText variant="bodyStrong" numberOfLines={1}>
+          {m.name}
+        </AppText>
+        {m.area || m.level ? (
+          <AppText variant="caption" color={colors.muted} numberOfLines={1}>
+            {[m.level ? `Level ${m.level}` : null, m.area].filter(Boolean).join(' · ')}
+          </AppText>
+        ) : null}
+      </View>
+      {/* Only owners and moderators get a tag; plain members stay quiet. */}
+      {tag ? <Tag label={ROLE_LABEL[m.role]} bg={tag.bg} fg={tag.fg} icon={tag.icon} style={{ alignSelf: 'center' }} /> : null}
+      {/* Fixed-width trailing slot keeps every row's right edge aligned. */}
+      <View style={{ width: 18 + space.xs, alignItems: 'flex-end' }}>{me ? null : <Icon name="more-horizontal" size={18} color={colors.muted} />}</View>
+    </AnimatedPressable>
+  );
+}
 
 export default function CircleMembersScreen() {
   const nav = useNavigation();
@@ -78,42 +116,22 @@ export default function CircleMembersScreen() {
     <Screen header={<ScreenHeader title="Members" subtitle={c?.name} />} keyboard>
       <SearchBar placeholder="Search members" value={q} onChangeText={setQ} style={{ marginTop: space.xs }} />
 
-      <QueryState status={load.status} error={load.error} hasData={members.length > 0} onRetry={load.reload} skeletonRows={4} skeletonHeight={64} empty={{ title: 'No members to show', body: 'Profiles are only shown to people who share a circle or plan.' }} style={{ marginTop: space.md }}>
-      <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, paddingHorizontal: space.md, marginTop: space.md }}>
-        {filtered.map((m, i) => (
-          <Pressable
-            key={m.id}
-            onPress={() => m.id !== 'me' && setSelected(m)}
-            disabled={m.id === 'me'}
-            accessibilityRole="button"
-            accessibilityLabel={`${m.name}, ${ROLE_LABEL[m.role]}`}
-            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: i === filtered.length - 1 ? 0 : 1, borderBottomColor: colors.border, minHeight: 64 }}
-          >
-            <Avatar seed={m.id === 'me' ? avatarSeed : m.id} uri={m.id === 'me' ? avatarUri : m.avatarUrl} size={44} />
-            <View style={{ flex: 1, marginLeft: space.sm }}>
-              <AppText variant="bodyStrong" numberOfLines={1}>
-                {m.name}
-              </AppText>
-              <AppText variant="caption" color={colors.muted}>
-                {m.level ? `Level ${m.level} · ` : ''}
-                {m.area || 'Member'}
-              </AppText>
-            </View>
-            <Tag label={ROLE_LABEL[m.role] || 'Member'} bg={(ROLE_TAG[m.role] || ROLE_TAG.member).bg} fg={(ROLE_TAG[m.role] || ROLE_TAG.member).fg} />
-            {m.id !== 'me' && <Icon name="more-vertical" size={18} color={colors.muted} style={{ marginLeft: space.xs }} />}
-          </Pressable>
-        ))}
-        {filtered.length === 0 && (
-          <AppText color={colors.muted} align="center" style={{ paddingVertical: space.lg }}>
-            No members match “{q}”
-          </AppText>
-        )}
-      </View>
+      <QueryState status={load.status} error={load.error} hasData={members.length > 0} onRetry={load.reload} skeletonRows={4} skeletonHeight={64} empty={{ title: 'No members to show', body: 'Profiles show only to people who share a circle or plan.' }} style={{ marginTop: space.md }}>
+        <ListGroup style={{ marginTop: space.md }}>
+          {filtered.map((m, i) => (
+            <MemberRow key={m.id} m={m} isLast={i === filtered.length - 1} avatarSeed={avatarSeed} avatarUri={avatarUri} onPress={() => m.id !== 'me' && setSelected(m)} />
+          ))}
+          {filtered.length === 0 && (
+            <AppText color={colors.muted} align="center" style={{ paddingVertical: space.lg }}>
+              No members match “{q}”
+            </AppText>
+          )}
+        </ListGroup>
       </QueryState>
 
       {hidden > 0 && !q && (
         <AppText variant="caption" color={colors.muted} align="center" style={{ marginTop: space.md }}>
-          + {hidden} more members. Profiles are only shown to people who share a circle or plan.
+          +{hidden} more members. Some profiles are private.
         </AppText>
       )}
 
@@ -121,33 +139,26 @@ export default function CircleMembersScreen() {
         {selected && (
           <View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Avatar seed={selected.id} uri={selected.avatarUrl} size={60} />
-              <View style={{ marginLeft: space.md, flex: 1 }}>
-                <AppText variant="bodyStrong">{ROLE_LABEL[selected.role]} · Level {selected.level ?? '—'}</AppText>
-                <AppText variant="caption" color={colors.muted}>
-                  Around {selected.area || 'nearby'}
+              <Avatar seed={selected.id} uri={selected.avatarUrl} size={52} />
+              <View style={{ marginLeft: space.sm, flex: 1 }}>
+                <AppText variant="bodyStrong" numberOfLines={1}>
+                  {[ROLE_LABEL[selected.role] || 'Member', selected.level ? `Level ${selected.level}` : null].filter(Boolean).join(' · ')}
+                </AppText>
+                <AppText variant="caption" color={colors.muted} numberOfLines={1}>
+                  {[selected.area ? `Around ${selected.area}` : null, selected.reliability != null ? `${Math.round(selected.reliability * 100)}% show-up rate` : null].filter(Boolean).join(' · ') || 'Circle member'}
                 </AppText>
               </View>
             </View>
-            {selected.reliability != null && (
-              <View style={{ marginTop: space.md }}>
-                <AppText variant="caption" color={colors.inkSoft}>
-                  {Math.round(selected.reliability * 100)}% show-up rate
-                </AppText>
-                <ProgressBar value={selected.reliability} fill={colors.success} style={{ marginTop: 6 }} accessibilityLabel="Show-up rate" />
-              </View>
-            )}
-            <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, paddingHorizontal: space.md, marginTop: space.lg }}>
+            <ListGroup style={{ marginTop: space.md }}>
               {canRemove(selected) && <ListRow icon="user-minus" title={removing ? 'Removing…' : 'Remove from circle'} onPress={() => !removing && remove(selected)} />}
-              <ListRow icon="flag" title="Report" subtitle="Tell us what happened — they won't know it was you" onPress={() => { const u = selected.id; setSelected(null); nav.navigate('report_flow', { userId: u }); }} />
-              <ListRow icon="slash" title="Block" danger subtitle="They can't see your plans or contact you" onPress={() => { const u = selected.id; setSelected(null); nav.navigate('block_confirm', { userId: u }); }} last />
-            </View>
+              <ListRow icon="flag" title="Report" subtitle="They won't know it was you" onPress={() => { const u = selected.id; setSelected(null); nav.navigate('report_flow', { userId: u }); }} />
+              <ListRow icon="slash" title="Block" danger subtitle="They can't see your plans or message you" onPress={() => { const u = selected.id; setSelected(null); nav.navigate('block_confirm', { userId: u }); }} last />
+            </ListGroup>
             {!!removeError && (
               <AppText variant="caption" color={colors.danger} style={{ marginTop: space.sm }} accessibilityLiveRegion="polite">
                 {removeError}
               </AppText>
             )}
-            <Button title="Close" variant="secondary" style={{ marginTop: space.md }} onPress={() => setSelected(null)} />
           </View>
         )}
       </Sheet>

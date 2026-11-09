@@ -13,6 +13,8 @@
     "pods": "cd ios && bundle exec pod install"
   },
   "dependencies": {
+    "@dicebear/avataaars": "^9.4.2",
+    "@dicebear/core": "^9.4.2",
     "@react-native-async-storage/async-storage": "~2.1.0",
     "@react-native-community/geolocation": "~3.4.0",
     "@react-native-firebase/app": "~21.14.0",
@@ -20,6 +22,7 @@
     "@react-navigation/bottom-tabs": "~7.2.0",
     "@react-navigation/native": "~7.0.14",
     "@react-navigation/native-stack": "~7.2.0",
+    "phosphor-react-native": "^3.0.6",
     "react": "18.3.1",
     "react-native": "0.76.5",
     "react-native-gesture-handler": "~2.21.2",
@@ -34,7 +37,9 @@
     "react-native-reanimated": "~3.16.6",
     "react-native-safe-area-context": "~4.14.0",
     "react-native-screens": "~4.4.0",
+    "react-native-sound": "^0.13.0",
     "react-native-svg": "~15.10.1",
+    "react-native-tts": "^4.1.1",
     "react-native-vector-icons": "~10.2.0",
     "zustand": "~5.0.2"
   },
