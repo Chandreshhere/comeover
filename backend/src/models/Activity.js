@@ -68,6 +68,10 @@ ActivitySchema.index({ circleId: 1 }, { partialFilterExpression: { circleId: { $
 ActivitySchema.index({ venueId: 1 }, { partialFilterExpression: { venueId: { $type: 'string' } } });
 ActivitySchema.index({ sponsoredCampaignId: 1 }, { partialFilterExpression: { sponsoredCampaignId: { $type: 'string' } } });
 ActivitySchema.index({ 'review.status': 1, createdAt: -1 });
+// Time-range scans for the admin insights dashboard (handlers/insights.js).
+ActivitySchema.index({ createdAt: -1 });
+ActivitySchema.index({ completedAt: -1 }, { partialFilterExpression: { completedAt: { $type: 'date' } } });
+ActivitySchema.index({ cancelledAt: -1 }, { partialFilterExpression: { cancelledAt: { $type: 'date' } } });
 ActivitySchema.index({ hostUserId: 1, idempotencyKey: 1 }, { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } });
 ActivitySchema.index({ title: 'text', description: 'text', tags: 'text', coarseArea: 'text' });
 

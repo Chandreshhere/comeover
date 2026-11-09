@@ -49,6 +49,9 @@ function achievementHint(c, left) {
       return `Try ${n(left, 'new category')}`;
     case 'host_completed':
       return `Host ${n(left, 'plan')} that actually happen${left === 1 ? 's' : ''}`;
+    case 'partner_visits':
+    case 'partnerVisits':
+      return `Visit ${n(left, 'partner place')} and show your perk code`;
     case 'reliability':
       return `Keep showing up — ${Math.round((c.min || 0.95) * 100)}%+ across ${c.minPlans || 10} plans`;
     default:

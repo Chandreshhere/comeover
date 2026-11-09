@@ -10,6 +10,7 @@ const { istDay } = require('../lib/xp');
 const P = require('../lib/present');
 const SM = require('../lib/socialMatch');
 const A = require('../services/activities');
+const Perks = require('../services/perks');
 
 const models = () => require('../models');
 
@@ -44,17 +45,21 @@ async function completedCounts(userIds) {
 }
 
 // Venues ---------------------------------------------------------------------
-async function venueExtras(venues) {
+// viewerId: the signed-in app user; their offers carry `eligibility`.
+async function venueExtras(venues, { viewerId = null, now = new Date() } = {}) {
   const { BusinessProfile, SponsoredCampaign } = models();
   const bizIds = [...new Set(venues.map((v) => v.businessId).filter(Boolean))];
-  const [biz, active] = await Promise.all([
+  const [bizRows, active] = await Promise.all([
     bizIds.length ? BusinessProfile.find({ _id: { $in: bizIds } }).select('name verificationStatus').lean() : [],
     bizIds.length ? SponsoredCampaign.distinct('businessId', { businessId: { $in: bizIds }, status: 'active' }) : [],
   ]);
-  return { biz: new Map(biz.map((b) => [b._id, b])), sponsored: new Set(active) };
+  const biz = new Map(bizRows.map((b) => [b._id, b]));
+  // Partner perks (VenueOffer) supersede the legacy Mixed `offers` field on Venue documents.
+  const offers = await Perks.offersForVenues(venues, { biz, viewerId, now });
+  return { biz, sponsored: new Set(active), offers };
 }
 
-function presentVenue(v, { biz, sponsored } = { biz: new Map(), sponsored: new Set() }) {
+function presentVenue(v, { biz, sponsored, offers } = { biz: new Map(), sponsored: new Set(), offers: new Map() }) {
   const b = v.businessId ? biz.get(v.businessId) : null;
   return {
     id: v._id,
@@ -64,7 +69,7 @@ function presentVenue(v, { biz, sponsored } = { biz: new Map(), sponsored: new S
     venueType: v.venueType || null,
     categories: v.categorySlugs || [],
     description: v.description || null,
-    offers: v.offers || [],
+    ...Perks.venueOfferFields(offers && offers.get(v._id)),
     bookingUrl: v.bookingUrl || null,
     verified: !!v.verified,
     sponsored: !!(v.businessId && sponsored.has(v.businessId)),
@@ -247,7 +252,7 @@ const routes = {
         .lean(),
     ]);
     const counts = await completedCounts(people.map((u) => u._id));
-    const extras = await venueExtras(venues);
+    const extras = await venueExtras(venues, { viewerId: user.id });
     return {
       activities: await A.presentMany(acts, user.id),
       people: await Promise.all(people.map((u) => P.publicUser(u, { completed: counts.get(u._id) || 0, area: (u.profile && u.profile.homeArea) || undefined }))),
@@ -256,12 +261,15 @@ const routes = {
   },
 
   'GET /v1/venues': async (req) => {
-    await requireUser(req);
-    const q = check({ category: { type: 'string', format: 'slug' } }, req.query);
+    const user = await requireUser(req);
+    const q = check({ category: { type: 'string', format: 'slug' }, hasOffer: { type: 'boolean' } }, req.query);
     const point = await A.referencePoint(req.query).catch(() => null);
     const page = pageParams(req.query);
-    const { Venue } = models();
-    const filter = { $and: [{ verified: true, isPublicPlace: true }, await verifiedBusinessFilter(), ...(q.category ? [{ categorySlugs: q.category }] : [])] };
+    const { Venue, VenueOffer } = models();
+    const now = new Date();
+    const and = [{ verified: true, isPublicPlace: true }, await verifiedBusinessFilter(), ...(q.category ? [{ categorySlugs: q.category }] : [])];
+    if (q.hasOffer) and.push({ _id: { $in: await VenueOffer.distinct('venueId', Perks.liveOfferFilter(now)) } });
+    const filter = { $and: and };
     let rows;
     if (point) {
       rows = await Venue.aggregate([
@@ -284,7 +292,7 @@ const routes = {
     }
     const more = rows.length > page.limit;
     const list = rows.slice(0, page.limit);
-    const extras = await venueExtras(list);
+    const extras = await venueExtras(list, { viewerId: user.id, now });
     return { items: list.map((v) => presentVenue(v, extras)), nextCursor: more ? encodeCursor({ o: page.offset + page.limit }) : null };
   },
 
@@ -302,7 +310,7 @@ const routes = {
       .sort({ startsAt: 1 })
       .limit(10)
       .lean();
-    const extras = await venueExtras([v]);
+    const extras = await venueExtras([v], { viewerId: user.id });
     return { ...presentVenue(v, extras), upcomingPlans: await A.presentMany(upcoming, user.id) };
   },
 };

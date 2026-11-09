@@ -19,7 +19,7 @@ const RANGE_DAYS = { '7d': 7, '30d': 30 };
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 const IN_GROUP = ['accepted', 'checked_in', 'completed'];
 const ACCEPTED_LIKE = ['accepted', 'checked_in', 'completed', 'no_show'];
-const QUEST_CRITERIA = ['complete_activities', 'new_people', 'new_category', 'host_completed', 'early_activity', 'late_activity', 'category_completed', 'distinct_categories', 'reliability'];
+const QUEST_CRITERIA = ['complete_activities', 'new_people', 'new_category', 'host_completed', 'early_activity', 'late_activity', 'category_completed', 'distinct_categories', 'reliability', 'partner_visits', 'partnerVisits'];
 const REASON = { type: 'string', required: true, min: 3, max: 1000 };
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -56,11 +56,13 @@ async function setUserStatus(session, after, adminId, userId, status, reason, du
   const res = await User.updateOne({ _id: String(userId), status: { $ne: 'deleted' } }, { $set }, { session });
   if (!res.matchedCount) throw err.notFound('user_not_found');
   if (status === 'suspended') {
+    const cancelIds = await Activity.distinct('_id', { hostUserId: String(userId), status: { $in: ['open', 'full'] } }).session(session);
     await Activity.updateMany(
       { hostUserId: String(userId), status: { $in: ['open', 'full'] } },
       { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: 'host_suspended' } },
       { session }
     );
+    await require('../services/perks').cancelHolds(session, after, cancelIds);
     // Sign the user out everywhere (refresh tokens revoked; access tokens expire within 15 min
     // and requireUser re-reads the suspended status on every request).
     after(() => tokens.revokeAllForUser(String(userId), 'suspended'));
@@ -371,6 +373,7 @@ const routes = {
             await Message.updateOne({ _id: r.messageId }, { $set: { deletedAt: new Date() } }, { session });
           } else if (r.activityId) {
             await Activity.updateOne({ _id: r.activityId }, { $set: { status: 'moderated', moderationNote: v.reason, 'review.status': 'removed', 'review.reviewedBy': admin.id, 'review.reviewedAt': new Date() } }, { session });
+            await require('../services/perks').cancelHolds(session, after, [r.activityId], { reason: 'The plan was removed.' });
             after(() => realtime.publish(`activity:${r.activityId}`, 'activity.updated', { activityId: r.activityId, status: 'moderated' }));
           } else if (r.reportedUserId) {
             await User.updateOne({ _id: r.reportedUserId, profile: { $ne: null } }, { $set: { 'profile.bio': null, 'profile.avatarKey': null, 'profile.updatedAt': new Date() } }, { session });
@@ -575,6 +578,7 @@ const routes = {
         await Activity.updateOne({ _id: a._id }, { $set: { moderationNote: 'approved', 'review.status': 'approved', ...reviewed } }, { session });
       } else {
         await Activity.updateOne({ _id: a._id }, { $set: { status: 'moderated', moderationNote: v.reason, 'review.status': 'removed', ...reviewed } }, { session });
+        await require('../services/perks').cancelHolds(session, after, [a._id], { reason: 'The plan was removed.' });
         const ps = await Participant.find({ activityId: a._id, state: { $in: ['requested', 'accepted', 'waitlisted', 'checked_in'] } }).select('userId').session(session).lean();
         const recipients = [...new Set([a.hostUserId, ...ps.map((p) => p.userId)])];
         for (const userId of recipients) {
@@ -708,6 +712,158 @@ const routes = {
       await audit({ actorAdminId: admin.id, action: `business.${v.decision}`, targetType: 'business', targetId: businessId, metadata: { reason: v.reason }, ip: req.ip }, { session });
     });
     return { id: businessId, verificationStatus: status };
+  },
+
+  // Business review queue: pending oldest first (FIFO), the other tabs newest first.
+  'GET /v1/admin/businesses': async (req) => {
+    const { BusinessProfile, Venue, VenueOffer, OfferRedemption } = require('../models');
+    await requireAdmin(req, 'admin');
+    const q = check({ status: { type: 'string', enum: ['pending', 'verified', 'rejected', 'suspended', 'all'], default: 'pending' } }, req.query);
+    const page = pageParams(req.query, { def: 25, max: 100 });
+    const filter = q.status === 'all' ? {} : { verificationStatus: q.status };
+    const dir = q.status === 'pending' ? 1 : -1;
+    const [rows, byStatus] = await Promise.all([
+      BusinessProfile.find(filter).sort({ createdAt: dir, _id: dir }).skip(page.offset).limit(page.fetchLimit).lean(),
+      BusinessProfile.aggregate([{ $group: { _id: '$verificationStatus', n: { $sum: 1 } } }]),
+    ]);
+    const ids = rows.slice(0, page.limit).map((b) => b._id);
+    const since = new Date(Date.now() - 30 * 86400000);
+    const [venues, owners, offers, visits] = await Promise.all([
+      ids.length ? Venue.find({ businessId: { $in: ids } }).sort({ createdAt: 1 }).lean() : [],
+      usersById(rows.map((b) => b.ownerUserId)),
+      ids.length
+        ? VenueOffer.aggregate([{ $match: { businessId: { $in: ids } } }, { $group: { _id: '$businessId', total: { $sum: 1 }, active: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } } } }])
+        : [],
+      ids.length ? OfferRedemption.aggregate([{ $match: { businessId: { $in: ids }, status: 'redeemed', redeemedAt: { $gte: since } } }, { $group: { _id: '$businessId', n: { $sum: 1 } } }]) : [],
+    ]);
+    const venueOf = new Map();
+    for (const v of venues) if (!venueOf.has(v.businessId)) venueOf.set(v.businessId, v);
+    const offersOf = new Map(offers.map((o) => [o._id, o]));
+    const visitsOf = new Map(visits.map((x) => [x._id, x.n]));
+    const counts = { pending: 0, verified: 0, rejected: 0, suspended: 0 };
+    for (const r of byStatus) if (r._id in counts) counts[r._id] = r.n;
+    const out = await pageOf(rows, page, async (b) => {
+      const v = venueOf.get(b._id) || null;
+      const owner = owners.get(b.ownerUserId);
+      const o = offersOf.get(b._id) || {};
+      return {
+        id: b._id,
+        name: b.name,
+        kind: b.kind,
+        verificationStatus: b.verificationStatus,
+        reviewNote: b.reviewNote || null,
+        planId: b.planId || null,
+        gstin: b.gstin || null,
+        createdAt: b.createdAt,
+        contact: { name: b.contactName || null, phone: b.contactPhone || null, email: b.contactEmail || null },
+        owner: { id: b.ownerUserId, displayName: owner ? owner.name : null },
+        // Short-lived signed link to the proof document; null when storage is not configured.
+        proofUrl: b.verificationDocKey ? await media.signedGet(b.verificationDocKey, 600).catch(() => null) : null,
+        venue: v
+          ? { id: v._id, name: v.name, address: v.address || null, area: v.area || null, venueType: v.venueType || null, categories: v.categorySlugs || [], latitude: v.latitude ?? null, longitude: v.longitude ?? null, bookingUrl: v.bookingUrl || null, verified: !!v.verified }
+          : null,
+        offers: { active: o.active || 0, total: o.total || 0 },
+        verifiedVisits30d: visitsOf.get(b._id) || 0,
+      };
+    });
+    return { ...out, counts };
+  },
+
+  // Partner perks across all venues (moderation view).
+  'GET /v1/admin/offers': async (req) => {
+    const { VenueOffer, OfferRedemption, BusinessProfile, Venue } = require('../models');
+    const Perks = require('../services/perks');
+    const { weekKey } = require('../lib/perks');
+    await requireAdmin(req, 'admin');
+    const q = check({ status: { type: 'string', enum: ['active', 'paused', 'ended', 'all'], default: 'active' } }, req.query);
+    const page = pageParams(req.query, { def: 25, max: 100 });
+    const rows = await VenueOffer.find(q.status === 'all' ? {} : { status: q.status })
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(page.offset)
+      .limit(page.fetchLimit)
+      .lean();
+    const list = rows.slice(0, page.limit);
+    const wk = weekKey(new Date());
+    const [biz, venues, sums] = await Promise.all([
+      list.length ? BusinessProfile.find({ _id: { $in: [...new Set(list.map((o) => o.businessId))] } }).select('name verificationStatus').lean() : [],
+      list.length ? Venue.find({ _id: { $in: [...new Set(list.map((o) => o.venueId))] } }).select('name area').lean() : [],
+      list.length
+        ? OfferRedemption.aggregate([
+            { $match: { offerId: { $in: list.map((o) => o._id) }, status: 'redeemed' } },
+            { $group: { _id: '$offerId', total: { $sum: 1 }, week: { $sum: { $cond: [{ $eq: ['$weekKey', wk] }, 1, 0] } } } },
+          ])
+        : [],
+    ]);
+    const b = new Map(biz.map((x) => [x._id, x]));
+    const v = new Map(venues.map((x) => [x._id, x]));
+    const s = new Map(sums.map((x) => [x._id, x]));
+    return pageOf(rows, page, (o) => {
+      const bb = b.get(o.businessId);
+      const vv = v.get(o.venueId);
+      const st = s.get(o._id) || {};
+      return {
+        ...Perks.presentOffer(o, { business: true, stats: { week: st.week || 0, total: st.total || 0 } }),
+        business: { id: o.businessId, name: bb ? bb.name : null, verificationStatus: bb ? bb.verificationStatus : null },
+        venue: { id: o.venueId, name: vv ? vv.name : null, area: vv ? vv.area || null : null },
+      };
+    });
+  },
+
+  'POST /v1/admin/offers/{offerId}/status': async (req) => {
+    const { VenueOffer } = require('../models');
+    const { MAX_LIVE_OFFERS_PER_VENUE } = require('../lib/perks');
+    const admin = await requireAdmin(req, 'admin');
+    const v = check({ status: { type: 'string', required: true, enum: ['active', 'paused', 'ended'] }, reason: { type: 'string', required: true, min: 3, max: 500 } }, req.body);
+    const offerId = String(req.params.offerId);
+    await db.withTransaction(async (session) => {
+      const o = await VenueOffer.findById(offerId).session(session).lean();
+      if (!o) throw err.notFound('offer_not_found');
+      if (o.status === 'ended' && v.status !== 'ended') {
+        const live = await VenueOffer.countDocuments({ venueId: o.venueId, status: { $ne: 'ended' } }).session(session);
+        if (live >= MAX_LIVE_OFFERS_PER_VENUE) throw err.conflict('too_many_offers', `A venue can have up to ${MAX_LIVE_OFFERS_PER_VENUE} offers`);
+      }
+      await VenueOffer.updateOne({ _id: offerId }, { $set: { status: v.status } }, { session });
+      await audit({ actorAdminId: admin.id, action: `offer.status.${v.status}`, targetType: 'venue_offer', targetId: offerId, metadata: { reason: v.reason, from: o.status }, ip: req.ip }, { session });
+    });
+    return { id: offerId, status: v.status };
+  },
+
+  'GET /v1/admin/redemptions': async (req) => {
+    const { OfferRedemption, VenueOffer, Venue } = require('../models');
+    const { offerLabel } = require('../lib/perks');
+    const { statusOf } = require('../services/perks');
+    await requireAdmin(req, 'admin');
+    const page = pageParams(req.query, { def: 25, max: 100 });
+    const rows = await OfferRedemption.find({ issuedAt: { $gte: new Date(Date.now() - 90 * 86400000) } })
+      .sort({ issuedAt: -1, _id: -1 })
+      .skip(page.offset)
+      .limit(page.fetchLimit)
+      .lean();
+    const list = rows.slice(0, page.limit);
+    const [offers, venues, people] = await Promise.all([
+      list.length ? VenueOffer.find({ _id: { $in: [...new Set(list.map((r) => r.offerId))] } }).select('title kind value').lean() : [],
+      list.length ? Venue.find({ _id: { $in: [...new Set(list.map((r) => r.venueId))] } }).select('name area').lean() : [],
+      usersById(list.map((r) => r.userId)),
+    ]);
+    const o = new Map(offers.map((x) => [x._id, x]));
+    const v = new Map(venues.map((x) => [x._id, x]));
+    const now = new Date();
+    return pageOf(rows, page, (r) => {
+      const oo = o.get(r.offerId);
+      const vv = v.get(r.venueId);
+      const u = people.get(r.userId);
+      return {
+        id: r._id,
+        status: statusOf(r, now),
+        code: r.code,
+        issuedAt: r.issuedAt,
+        redeemedAt: r.redeemedAt || null,
+        groupSize: r.groupSize ?? null,
+        offer: { id: r.offerId, title: oo ? oo.title : null, label: oo ? offerLabel(oo) : null },
+        venue: { id: r.venueId, name: vv ? vv.name : null, area: vv ? vv.area || null : null },
+        user: { id: r.userId, displayName: u ? u.name : null },
+      };
+    });
   },
 
   'GET /v1/admin/taxonomy/categories': async (req) => {

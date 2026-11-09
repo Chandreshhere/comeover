@@ -177,6 +177,28 @@ const routes = {
     return loadMe(user.id);
   },
 
+  // Every active city with its areas, for the city/area picker and for
+  // matching a location fix to the nearest city on the device.
+  'GET /v1/cities': async (req) => {
+    await requireUser(req, { allowSuspended: true });
+    const { CityArea } = require('../models');
+    const rows = await CityArea.find({ active: true }).select('city name centroid').sort({ city: 1, name: 1 }).lean();
+    const byCity = new Map();
+    for (const r of rows) {
+      if (!r.centroid || !Array.isArray(r.centroid.coordinates)) continue;
+      const list = byCity.get(r.city) || [];
+      list.push({ name: r.name, lat: r.centroid.coordinates[1], lng: r.centroid.coordinates[0] });
+      byCity.set(r.city, list);
+    }
+    const round = (v) => Math.round(v * 1e5) / 1e5;
+    const items = [...byCity.entries()].map(([name, areas]) => ({
+      name,
+      center: { lat: round(areas.reduce((x, a) => x + a.lat, 0) / areas.length), lng: round(areas.reduce((x, a) => x + a.lng, 0) / areas.length) },
+      areas,
+    }));
+    return { items };
+  },
+
   'GET /v1/me/bootstrap': async (req) => {
     const user = await requireUser(req, { allowSuspended: true });
     const { Category, Level, Notification } = require('../models');

@@ -21,6 +21,8 @@ const ParticipantSchema = makeSchema({
 ParticipantSchema.index({ activityId: 1, userId: 1 }, { unique: true });
 ParticipantSchema.index({ userId: 1, requestedAt: -1 });
 ParticipantSchema.index({ activityId: 1, state: 1 });
+ParticipantSchema.index({ requestedAt: -1 }); // admin insights time ranges
+ParticipantSchema.index({ checkedInAt: -1 }, { partialFilterExpression: { checkedInAt: { $type: 'date' } } });
 ParticipantSchema.index({ idempotencyKey: 1 }, { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } });
 
 ParticipantSchema.statics.STATES = STATES;

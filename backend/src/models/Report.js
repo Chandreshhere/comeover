@@ -21,5 +21,6 @@ const ReportSchema = makeSchema({
 ReportSchema.index({ status: 1, priority: 1, createdAt: 1 });
 ReportSchema.index({ reportedUserId: 1, createdAt: -1 });
 ReportSchema.index({ reporterUserId: 1, createdAt: -1 });
+ReportSchema.index({ createdAt: -1 }); // admin insights time ranges
 
 module.exports = model('Report', ReportSchema, 'reports');

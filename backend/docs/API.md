@@ -151,10 +151,42 @@ Notification { id, type: 'activity'|'nearby'|'join'|'message'|'quest'|'safety'|'
 
 Subscription { tier: 'free'|'plus'|'pro', status, expiresAt, store: 'apple'|'google'|null, venue: boolean }
 
-Venue        { id, name, area, address, venueType, categories, description, offers, bookingUrl, verified, sponsored,
-               latitude, longitude /* public business location */, distanceM, business: { id, name, verified } | null }
+Venue        { id, name, area, address, venueType, categories, description, bookingUrl, verified, sponsored,
+               latitude, longitude /* public business location */, distanceM, business: { id, name, verified } | null,
+               offers: Offer[] /* live perks only: status active, inside validFrom..validTo, venue + business verified; [0] is the best */,
+               hasOffer, bestOfferLabel /* offers[0].label */ | null }
+               // The legacy free-form `offers` field on venue documents is superseded by VenueOffer and never returned.
 
-MyVenue      Venue & { status: 'in_review'|'verified'|'rejected'|'suspended', planId, planStatus: 'active'|'payment_processing'|'none',
+Offer        { id, venueId, title /* 2–60 */, description /* ≤240 */ | null, kind: 'percent'|'flat'|'freebie',
+               value /* percent 5–50 | whole INR 10–5000 | null for freebie */,
+               label /* server-made: '15% off' | '₹100 off' | the title for a freebie */,
+               minGroup /* 1–20 */, minLevel /* 1–10 */, minShowUpRate /* 0–1 */,
+               days: number[] /* 0=Sun..6=Sat, IST */, startMinute, endMinute /* IST minutes from midnight, end exclusive */,
+               window /* server-made, plain English: 'Any time' | 'Mon to Thu, 4 to 7 pm' | 'Weekends, from 8 am' */,
+               validTo | null, perUserPerWeek /* 1–7 */,
+               eligibility? /* present whenever the viewer is a signed-in app user */:
+                 { eligible, reasons: Array<'level'|'show_up'|'weekly_limit'|'not_now'>,
+                   unlockLevel /* = minLevel */, unlockLevelName | null, usedThisWeek, activeRedemptionId | null } }
+               // Business and admin views add { status: 'active'|'paused'|'ended', validFrom, createdAt, updatedAt }.
+               // A perk is UNLOCKED by level (XP is never spent): level ≥ minLevel and show-up rate ≥ minShowUpRate
+               // (the rate counts as 1.0 until you have 3+ considered plans). It is usable when it is also inside its
+               // IST window ('not_now' otherwise) and under perUserPerWeek confirmed visits this IST week (Sunday start).
+
+PerkItem     { offer: Offer, venue: { id, name, area, venueType, categories, distanceM /* coarse */ | null } }
+
+Redemption   { id, code /* 6 chars, ABCDEFGHJKMNPQRSTUVWXYZ23456789 */, qrPayload /* 'comeover:redeem:<code>' */,
+               status: 'issued'|'redeemed'|'expired'|'cancelled' /* an issued code past expiresAt reads as 'expired' */,
+               issuedAt, expiresAt /* issuedAt + 20 min */, redeemedAt | null, groupSize | null, activityId | null,
+               offer: { id, title, label, window, minGroup }, venue: { id, name, area } }
+
+BusinessRedemption Redemption & { user: { firstName, level, levelName } }   // first name only, never the phone
+
+TableHold    { id, activityId, venueId, partySize /* 1–20 */, note /* ≤140 */ | null,
+               status: 'requested'|'confirmed'|'declined'|'cancelled', startsAt /* copied from the plan */, createdAt,
+               respondedAt | null, declineReason | null, venue: { id, name, area },
+               activity?: { id, title, startsAt, endsAt, capacity, joinedCount }, host?: { firstName } /* business view only */ }
+
+MyVenue      Venue /* offers = what app users see now, without eligibility */ & { status: 'in_review'|'verified'|'rejected'|'suspended', planId, planStatus: 'active'|'payment_processing'|'none',
                reviewNote, contact: { name, phone, email }, business: { id, name, kind, role, verified },
                upcomingPlans: Activity[], planCount, sponsorDisclosure }
 
@@ -227,6 +259,11 @@ Auth: App. Suspended accounts may call it.
 Auth: App. Suspended accounts may call it.
 
 - Returns: `Me`.
+
+### `GET /cities`
+Auth: App. Suspended accounts may call it.
+
+- Returns `{ items: [{ name, center: { lat, lng }, areas: [{ name, lat, lng }] }] }`: every active city (from the admin-managed area taxonomy), alphabetical, with its areas. The app uses it for the city/area picker and to match a location fix to the nearest city. Save the choice with `PATCH /me/profile { city, area }`; `GET /me/bootstrap` then returns that city.
 
 ### `GET /me/bootstrap`
 Auth: App. Suspended accounts may call it.
@@ -397,13 +434,13 @@ Auth: App. Paginated.
 ### `GET /venues`
 Auth: App. Paginated.
 
-- Query: `category`, and optionally `lat&lng`.
-- Returns: `{ items: Venue[], nextCursor }` (verified venues only).
+- Query: `category`, `hasOffer=true` (only venues with a live perk), and optionally `lat&lng`.
+- Returns: `{ items: Venue[], nextCursor }` (verified venues only). Each venue carries `offers` (with `eligibility` for you), `hasOffer` and `bestOfferLabel`.
 
 ### `GET /venues/{venueId}`
 Auth: App.
 
-- Returns: `Venue & { upcomingPlans: Activity[] }`.
+- Returns: `Venue & { upcomingPlans: Activity[] }`, with `offers` (each with your `eligibility`).
 - Errors: `venue_not_found`.
 
 ## Plans (create, join, lifecycle)
@@ -486,6 +523,7 @@ Auth: App (host only).
 
 - Body: `{ reason? }`.
 - Returns: `Activity` with `status: 'cancelled'`.
+- A requested or confirmed table hold for the plan is cancelled too, and the venue staff are notified. (Admins removing a plan, or suspending its host, does the same.)
 - Errors: `host_only`, `not_cancellable`.
 
 ### `POST /activities/{activityId}/check-ins`
@@ -926,9 +964,11 @@ Auth: App (business staff).
   series: { planViews: number[], joins: number[], checkIns: number[], impressions: number[], clicks: number[] },
   totals: { planViews, joins, checkIns, impressions, clicks },
   previousTotals: { ...same keys, for the preceding period of equal length },
+  verifiedVisits: { week, month },
   note }
 ```
 
+  - `verifiedVisits` counts perk codes confirmed by staff at this venue (verified partner visits): this IST week (from Sunday) and this IST calendar month.
   - `planViews` counts non-host opens of plans at the venue.
   - `joins` counts join requests to those plans.
   - `checkIns` counts check-ins.
@@ -950,6 +990,135 @@ Auth: App (business staff).
 - An optional fast path; the webhook remains authoritative.
 - Returns: `{ status: 'paid', invoiceId }`.
 - Errors: `invoice_not_found`, `invalid_signature`.
+
+## Partner perks and table holds
+
+Venues fund the perks; Come Over never holds money here. Perks are unlocked by level (XP is never spent or deducted). The user shows a 6-character code or its QR; venue staff enter it in the business hub, and a confirmed code is one verified partner visit. Confirmed visits count as `partnerVisits` in quest stats (quest criterion `partner_visits`, alias `partnerVisits`).
+
+### `GET /me/perks`
+Auth: App.
+
+- Query: optionally `lat&lng` (or `area`).
+- Returns:
+
+```
+{ level: { level, name }, showUpRate /* your real rate, 2 dp */, plansConsidered,
+  unlocked: PerkItem[] /* level and show-up met; may still be not_now / weekly_limit */,
+  locked: PerkItem[]   /* level or show-up not met */,
+  nextUnlock: { level, name | null, xpNeeded | null, offers /* how many perks that level unlocks */ } | null }
+```
+
+  - Only live perks at verified partner venues. Sorted by distance when a location is given, else by venue name; at most 50 in each list.
+  - `nextUnlock` is the lowest level above yours that some perk needs; `null` when no perk is locked by level.
+
+### `POST /offers/{offerId}/redeem`
+Auth: App. Rate limit: 30 new codes per hour.
+
+- Body: `{ activityId? }`: the plan you are at. It is kept only if you are its host or an accepted member (it sets the default group size).
+- Returns: `201 { redemption: Redemption }`. If you already have an unexpired code for this offer you get that one back with `200`.
+- Errors:
+  - `offer_not_found` (404): unknown, paused, ended, outside its validity dates, or the venue is not verified.
+  - `offer_locked` (403): `details: { reasons /* includes 'level' and/or 'show_up' */, unlockLevel }`.
+  - `weekly_limit` (409): `details: { usedThisWeek, perUserPerWeek }`.
+  - `not_now` (409): outside the IST day/time window; `details: { window }`.
+
+### `GET /redemptions/{redemptionId}`
+Auth: App (owner only).
+
+- Returns: `{ redemption: Redemption }`. Poll this every few seconds while the code is on screen; it turns `redeemed` when staff confirm it. A `redemption.updated` realtime event is also sent on `user:{userId}:notifications`.
+- Errors: `redemption_not_found` (404, also for other people's codes).
+
+### `POST /redemptions/{redemptionId}/cancel`
+Auth: App (owner only).
+
+- Moves an issued code to `cancelled`. Cancelling a cancelled code returns it unchanged.
+- Returns: `{ redemption: Redemption }`.
+- Errors: `redemption_not_found`, `not_cancellable` (409: already used or expired).
+
+### `GET /me/redemptions`
+Auth: App.
+
+- Returns: `{ items: Redemption[], nextCursor: null }`, newest first, codes issued in the last 90 days.
+
+### `POST /activities/{activityId}/table-hold`
+Auth: App (host only).
+
+- Body: `{ partySize? /* 1–20, default the plan capacity (max 20) */, note? /* ≤140 */ }`.
+- Asks the plan's partner venue to hold a table. All staff of the venue's business get a notification (`type: 'system'`, target `business_holds`).
+- Returns: `201 TableHold`.
+- Errors: `activity_not_found`, `host_only` (403), `activity_not_open` (409: not open/full, or already over), `not_partner_venue` (409: the plan has no verified partner `venueId`), `hold_exists` (409: a requested or confirmed hold already exists).
+
+### `GET /activities/{activityId}/table-hold`
+Auth: App (host or accepted member).
+
+- Returns: `{ hold: TableHold | null }`: the open (requested or confirmed) hold, else the latest one.
+- Errors: `activity_not_found`, `not_participant` (403).
+
+### `DELETE /activities/{activityId}/table-hold`
+Auth: App (host only).
+
+- Cancels the requested or confirmed hold; venue staff are notified.
+- Returns: `{ ok: true }`.
+- Errors: `activity_not_found`, `host_only`, `hold_not_found`.
+
+### `GET /business/offers`
+Auth: App (business staff).
+
+- Query: `businessId?`, `venueId?`.
+- Returns: `{ items: Array<Offer & { status, validFrom, createdAt, updatedAt, stats: { week, total } }>, nextCursor: null }`. Active first, then paused, then ended; `stats` counts confirmed visits (this IST week, all time).
+- Errors: `no_business`.
+
+### `POST /business/offers`
+Auth: App (any staff member of the business).
+
+- Body:
+
+```
+{ businessId?, venueId? /* default: the business's first venue */,
+  title /* 2–60 */, description?, kind: 'percent'|'flat'|'freebie', value /* percent 5–50, flat whole INR 10–5000, ignored for freebie */,
+  minGroup? /* 1–20, default 2 */, minLevel? /* 1–10, default 1 */, minShowUpRate? /* 0–1, default 0.8 */,
+  days? /* 0=Sun..6=Sat IST, default all */, startMinute? /* 0–1439, default 0 */, endMinute? /* 1–1440, default 1440; > startMinute */,
+  validFrom?, validTo? /* > validFrom */, perUserPerWeek? /* 1–7, default 1 */, status?: 'active'|'paused' /* default active */ }
+```
+
+- Returns: `201 Offer & { status, validFrom, createdAt, updatedAt }`. Offers can be created while the venue is in review; users see them only once the venue is verified.
+- Errors: `no_business`, `no_venue`, `validation_failed` (`details` paths include `value`, `endMinute`, `validTo`, `days`), `too_many_offers` (409: max 10 non-ended offers per venue).
+
+### `PATCH /business/offers/{offerId}`
+Auth: App (any staff member of the offer's business).
+
+- Body: any create field (except `businessId`/`venueId`) plus `status: 'active'|'paused'|'ended'`. Send `null` to clear `description`, `validFrom` or `validTo`. The merged offer is validated again; switching to `freebie` clears `value`.
+- Returns: `Offer & { status, validFrom, createdAt, updatedAt }`.
+- Errors: `offer_not_found` (404, also for other businesses' offers), `offer_ended` (409: ended is final), `validation_failed`, `no_business`.
+
+### `POST /business/redemptions/confirm`
+Auth: App (any staff member). Rate limit: 30 per minute.
+
+- Body: `{ code, groupSize? }`. The code is case-insensitive; spaces and dashes are ignored, and a scanned `comeover:redeem:<code>` payload works too. `groupSize` defaults to the accepted members of the redemption's plan (host included), else 1; it is clamped to 1–20.
+- Returns: `{ redemption: BusinessRedemption }` with `status: 'redeemed'`.
+- Errors: `no_business` (403), `code_not_found` (404), `wrong_venue` (403: the code belongs to another business), `code_used` (409), `code_expired` (410: expired or cancelled).
+
+### `GET /business/redemptions`
+Auth: App (business staff).
+
+- Query: `businessId?`.
+- Returns: `{ items: BusinessRedemption[] /* confirmed in the last 30 days, newest first, max 200 */, counts: { today, week, month }, nextCursor: null }`. Counts are IST: today, this week (from Sunday), this calendar month.
+- Errors: `no_business`.
+
+### `GET /business/table-holds`
+Auth: App (business staff).
+
+- Query: `status=requested|upcoming|all` (default `upcoming` = requested or confirmed, starting no earlier than 2 h ago; `requested` uses the same time rule), `businessId?`.
+- Returns: `{ items: TableHold[] /* business view with activity + host */, nextCursor: null }`. Sorted by start time (`all`: newest first), max 100.
+- Errors: `no_business`.
+
+### `POST /business/table-holds/{holdId}/respond`
+Auth: App (any staff member of the hold's business).
+
+- Body: `{ decision: 'confirm'|'decline', reason? /* ≤140, shown to the host */ }`.
+- `confirm` works on a requested hold (confirming again is a no-op); `decline` works on a requested or confirmed hold. The host is notified (`type: 'activity'`, target `activity_detail`).
+- Returns: `TableHold` (business view).
+- Errors: `no_business`, `hold_not_found` (404), `hold_not_pending` (409).
 
 ## IRL Guide
 
@@ -1136,6 +1305,39 @@ Auth: Admin. An extension: venues appear in the app only after verification.
 - Returns: `{ id, verificationStatus }`.
 - Errors: `business_not_found`.
 
+### `GET /admin/businesses`
+Auth: Admin. Paginated (default 25, max 100).
+
+- Query: `status=pending|verified|rejected|suspended|all` (default `pending`). Pending is oldest first; the other tabs are newest first.
+- Returns:
+
+```
+{ items: [{ id, name, kind, verificationStatus, reviewNote, planId, gstin, createdAt,
+            contact: { name, phone, email }, owner: { id, displayName },
+            proofUrl /* 10-minute signed link to the proof document; null when storage is not configured or there is none */,
+            venue: { id, name, address, area, venueType, categories, latitude, longitude, bookingUrl, verified } | null,
+            offers: { active, total }, verifiedVisits30d }],
+  nextCursor, counts: { pending, verified, rejected, suspended } }
+```
+
+### `GET /admin/offers`
+Auth: Admin. Paginated (default 25, max 100).
+
+- Query: `status=active|paused|ended|all` (default `active`). Newest first.
+- Returns: `{ items: [Offer /* no eligibility */ & { status, validFrom, createdAt, updatedAt, business: { id, name, verificationStatus }, venue: { id, name, area }, stats: { week, total } }], nextCursor }`.
+
+### `POST /admin/offers/{offerId}/status`
+Auth: Admin. Audited (`offer.status.<status>`).
+
+- Body: `{ status: 'active'|'paused'|'ended', reason /* 3–500 */ }`.
+- Returns: `{ id, status }`.
+- Errors: `offer_not_found`, `too_many_offers` (409: reviving an ended offer at a venue that already has 10).
+
+### `GET /admin/redemptions`
+Auth: Admin. Paginated (default 25, max 100).
+
+- Returns: `{ items: [{ id, status, code, issuedAt, redeemedAt, groupSize, offer: { id, title, label }, venue: { id, name, area }, user: { id, displayName } }], nextCursor }`. All venues, codes issued in the last 90 days, newest first.
+
 ### `GET /admin/taxonomy/categories`
 Auth: Admin.
 
@@ -1182,7 +1384,7 @@ Auth: Admin.
 Auth: Admin.
 
 - Body: `{ slug, kind: 'daily'|'weekly'|'milestone', title, description, pictogram?, criteria, xpReward /* 0–500 */, active?, startsAt?, endsAt?, reason }`.
-- `criteria.type` is one of: `complete_activities`, `new_people`, `new_category`, `host_completed`, `early_activity`, `late_activity`, `category_completed`, `distinct_categories`, `reliability`. These are verified real-world actions only.
+- `criteria.type` is one of: `complete_activities`, `new_people`, `new_category`, `host_completed`, `early_activity`, `late_activity`, `category_completed`, `distinct_categories`, `reliability`, `partner_visits` (alias `partnerVisits`: perk codes confirmed by partner-venue staff, e.g. `{ type: 'partner_visits', count: 2, window: 'week' }` for "Visit 2 partner places this week"). These are verified real-world actions only.
 - Returns: `201` with the quest.
 - Errors: `invalid_criteria`.
 
@@ -1192,3 +1394,65 @@ Auth: Admin.
 - Body: `{ title?, description?, pictogram?, xpReward?, active?, startsAt?, endsAt?, reason }`. `questId` is the id or the slug. Send `null` to clear `startsAt` or `endsAt`.
 - Returns: the quest.
 - Errors: `quest_not_found`.
+
+## Admin insights, user directory and announcements
+
+Admin role only (moderators get `403 insufficient_role`). Days and weeks are IST calendar buckets (`Asia/Kolkata`); weeks start on Sunday, like the app's week strip.
+
+### `GET /admin/insights`
+Auth: Admin.
+
+- Query: `range=7d|30d|90d` (default `30d`). The range ends today (IST, partial day included); `prev` is the equal-length period just before it.
+- Returns:
+
+```
+{ range, timezone, generatedAt,
+  days: ['YYYY-MM-DD', ...],
+  series: [{ day, signups, engagedUsers, plansCreated, joinRequests, accepted, checkIns, completed, cancelled,
+             reports, messages, redemptions, tableHolds }],
+  totals: { <same keys>, prev: { <same keys> } },
+  rates: { showUpRate, joinConversion, prev: { showUpRate, joinConversion }, daily: [{ day, showUpRate, joinConversion }] },
+  funnel: [{ label: 'Signed up'|'Finished profile'|'Asked to join'|'Got accepted'|'Met up', value }],
+  cohorts: [{ week, size, weeks: [rate|null x 8] }],
+  retention: [{ label: 'Week 1'..'Week 4', value|null, cohortUsers }],
+  categories: [{ slug, label, plans, completed }],
+  areas: [{ area, plans, users }],
+  heatmap: { values: number[7][24] },
+  socialStyle: { introvert, ambivert, extrovert, unset },
+  levels: [{ level, name, users }],
+  partners: { venues: { verified, pending }, offers: { active }, redemptions: { range, prev },
+              tableHolds: { requested, confirmed, declined, cancelled } },
+  revenue: { plus, pro, venuePlans, mrrEstimateInr, granted, prices: { plusInr, proInr, venueInr },
+             prev: { plus, pro, venuePlans, mrrEstimateInr }, daily: [{ day, subscriptions }], note },
+  safety: { reportsByReason: [{ reason, n }], medianHoursToResolve, resolved, openReports, blocks } }
+```
+
+- `engagedUsers`: distinct people who created a plan, asked to join, checked in, sent a message or earned XP (> 0). Per day in `series`; in `totals` it is distinct across the whole period, not the sum of days.
+- `joinRequests` / `accepted`: non-host join requests by the day they were made, and how many of those got in (accepted, checked in, completed or no-show). `checkIns` by check-in time; `completed` / `cancelled` by `completedAt` / `cancelledAt`; `messages` excludes system messages; `redemptions` are confirmed partner visits (`redeemedAt`); `tableHolds` are holds requested that day.
+- `rates.showUpRate`: non-host accepted people on plans that started in the period and have ended, who checked in or completed. `rates.joinConversion` = `accepted / joinRequests`. Ratios are `null` when there is nothing to divide.
+- `funnel`: people who signed up inside the range; every step is a subset of the one before.
+- `cohorts`: the last 8 signup weeks, newest last. `weeks[k]` = share of the cohort engaged during week `k` after the signup week (`k = 0` is the signup week); `null` until that week starts. `retention` is the size-weighted average over cohorts whose week `k` has fully ended.
+- `categories` and `areas` (top 12) and `heatmap` (IST weekday 0 = Sunday x start hour) cover plans created in the range. `areas.users` counts members whose home area matches. `socialStyle` and `levels` describe the current member base (everyone with a profile who is not deleted).
+- `revenue`: active paid entitlements (complimentary grants excluded) x the monthly list price from the plans config (`GET /plans`: Plus ₹149, Pro ₹399, Venue `VENUE_PLAN_PRICE_INR`, default ₹999). An estimate before store fees and GST.
+- Partner numbers read as zero when the partner models are not deployed.
+
+### `GET /admin/users`
+Auth: Admin. Paginated.
+
+- Query: `q?`, `status=active|limited|suspended|deleted|all` (default `all`), `sort=new|active` (default `new`), `cursor?`, `limit?` (max 100).
+- `q` matches the exact user id, the display name (case-insensitive substring, escaped), or the last 4 digits of the phone. Full numbers are never searchable or returned.
+- Returns: `{ items: [{ id, displayName, phoneMasked, area, status, level, xp, createdAt, lastActiveAt, roles, reportsAgainst }], nextCursor, counts: { total, active7d, suspended } }`. `phoneMasked` looks like `+91 ••••• •3210` (`null` for purged accounts). `counts` exclude deleted accounts (except `suspended`).
+
+### `POST /admin/announcements`
+Auth: Admin.
+
+- Body: `{ title /* <= 60 */, body /* <= 180 */, audience: { kind: 'all'|'area', value? }, deepLink?, dryRun?, reason /* >= 10 chars */ }`. `title`, `body` and `reason` are required for a real send. `deepLink` must look like `projectirl://discover/home`.
+- Audience: active members with a profile (all, or whose home area matches `value`, ignoring case). Announcements count as "News & offers", so only people who turned that setting on (`notificationPrefs.productUpdates`) receive them.
+- Dry run returns `{ dryRun: true, recipients, eligible, optedOut }` and writes nothing.
+- A send writes one in-app notification (`type: 'marketing'`, `data: { announcementId, deepLink, target }`) per recipient in batches of 500, queues `push` jobs for the same batches (preferences and quiet hours apply; a no-op when push is not configured), writes an `announcement.send` audit event and returns `201 { id, recipients }`. `target` is set for known app paths (for example `discover/home`, `me/perks`, `quest/home`).
+- Errors: `validation_failed`, `audience_area_required`, `invalid_deep_link`, `announcement_limit` (429 with `Retry-After`; at most 3 sends per rolling 24 hours, dry runs are free).
+
+### `GET /admin/announcements`
+Auth: Admin.
+
+- Returns: `{ items: [{ id, title, body, audience: { kind, value }, deepLink, recipients, status, reason, createdBy: { id, name }, createdAt }], limit: { max, usedLast24h, nextAvailableAt } }`, newest first (last 50).

@@ -14,5 +14,6 @@ const XpEventSchema = makeSchema(
 );
 XpEventSchema.index({ idempotencyKey: 1 }, { unique: true });
 XpEventSchema.index({ userId: 1, createdAt: -1 });
+XpEventSchema.index({ createdAt: -1 }); // admin insights time ranges
 
 module.exports = model('XpEvent', XpEventSchema, 'xp_events');

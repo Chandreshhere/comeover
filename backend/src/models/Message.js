@@ -17,6 +17,7 @@ MessageSchema.pre('validate', function senderRule(next) {
 });
 MessageSchema.index({ conversationId: 1, createdAt: -1 });
 MessageSchema.index({ senderUserId: 1, createdAt: -1 });
+MessageSchema.index({ createdAt: -1 }); // admin insights time ranges
 MessageSchema.index({ conversationId: 1, senderUserId: 1, clientKey: 1 }, { unique: true, partialFilterExpression: { clientKey: { $type: 'string' } } });
 
 module.exports = model('Message', MessageSchema, 'messages');

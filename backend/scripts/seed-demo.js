@@ -12,7 +12,8 @@
 //   ~34 plans (live now, tonight, tomorrow, weekend, full + waitlist, sponsored, circle-only, invite-only,
 //   flagged for review, cancelled, completed history across the last 30 days), join requests, group chats,
 //   5 circles + a challenge, SplitMate expenses, notifications, XP / quests / badges, reports + appeals,
-//   audit log, subscriptions, venues, campaigns, metrics and invoices.
+//   audit log, subscriptions, venues, campaigns, metrics and invoices, partner perks (verified partner
+//   venues in Ahmedabad and Indore with level-unlocked offers, confirmed visits, table holds).
 //   The test account (the phone in SEED_TEST_PHONE / TEST_LOGIN_PHONE) gets a completed profile + progress
 //   and is wired into all of it.
 //
@@ -26,6 +27,7 @@ const { cellId } = require('../src/lib/geo');
 const { levelForXp, DAILY_CAP, istDay } = require('../src/lib/xp');
 const { computeShares } = require('../src/lib/split');
 const { periodKey, weekStart } = require('../src/lib/quests');
+const { CODE_ALPHABET, weekKey: perkWeekKey } = require('../src/lib/perks');
 const { AREAS, LEVELS, QUESTS, ACHIEVEMENTS, CATEGORIES } = require('./seed');
 
 const models = () => require('../src/models');
@@ -113,12 +115,54 @@ const USERS = [
 const DEMO_STYLES = { aarav: 'introvert', diya: 'extrovert', kabir: 'ambivert', meera: 'introvert', rohan: 'extrovert', ishita: 'ambivert', vikram: 'extrovert', anaya: 'introvert', saanvi: 'ambivert', kavya: 'introvert', arjun: 'ambivert', dev: 'extrovert' };
 
 const BASE_VENUES = {
-  chaihouse: { name: 'Sabarmati Chai House', area: 'Navrangpura', type: 'Public café', cats: ['chai', 'cowork', 'study'], biz: 'biz2', verified: true, address: 'Ground floor, near the CG Road junction, Navrangpura', desc: 'Quiet corner café with long shared tables, plenty of power sockets and unlimited refills of masala chai.', offer: { title: '10% off for Come Over groups of 3 or more', terms: 'Show the plan in the app at the counter. Valid Mon–Thu.' } },
-  roast: { name: 'Riverside Roast', area: 'Riverfront', type: 'Public café', cats: ['chai', 'photo', 'walk', 'music'], biz: 'biz1', verified: true, address: 'Promenade level, Riverfront east, Ahmedabad', desc: 'Open-air café on the promenade. Good light for photos, better filter coffee.', offer: { title: 'Free cookie with every chai flight', terms: 'One per person. Show your Come Over plan.' } },
-  dice: { name: 'Dice & Dough', area: 'Vastrapur', type: 'Board-game café', cats: ['boardgames', 'gaming', 'food'], biz: 'biz1', verified: true, address: 'First floor, Vastrapur, Ahmedabad', desc: 'Two hundred board games, thin-crust pizza and staff who will teach you Catan again.', offer: { title: '₹100 off the table fee for groups of 4+', terms: 'Weekdays before 6 PM.' } },
-  court7: { name: 'Court 7 Sports Hub', area: 'Bodakdev', type: 'Sports court', cats: ['badminton', 'gym', 'run'], biz: 'biz2', verified: true, address: 'Bodakdev, Ahmedabad (sports complex)', desc: 'Six wooden badminton courts, a small gym and a running track.', offer: { title: 'First hour free for new Come Over members', terms: 'One redemption per member.' } },
-  haveli: { name: 'Old City Heritage Café', area: 'Old City', type: 'Public café', cats: ['food', 'explore', 'photo'], biz: 'biz3', verified: false, address: 'Pol area, Old City, Ahmedabad', desc: 'Courtyard café in a restored haveli. Awaiting verification.', offer: null },
+  chaihouse: { name: 'Sabarmati Chai House', area: 'Navrangpura', type: 'Public café', cats: ['chai', 'cowork', 'study'], biz: 'biz2', verified: true, address: 'Ground floor, near the CG Road junction, Navrangpura', desc: 'Quiet corner café with long shared tables, plenty of power sockets and unlimited refills of masala chai.', perks: [{ title: 'Group chai discount', kind: 'percent', value: 10, minGroup: 3, days: [1, 2, 3, 4], description: 'For Come Over groups of 3 or more. Show your perk code at the counter.' }] },
+  roast: { name: 'Riverside Roast', area: 'Riverfront', type: 'Public café', cats: ['chai', 'photo', 'walk', 'music'], biz: 'biz1', verified: true, address: 'Promenade level, Riverfront east, Ahmedabad', desc: 'Open-air café on the promenade. Good light for photos, better filter coffee.', perks: [{ title: 'Free cookie with a chai flight', kind: 'freebie', minGroup: 1, description: 'One per person.' }] },
+  dice: { name: 'Dice & Dough', area: 'Vastrapur', type: 'Board-game café', cats: ['boardgames', 'gaming', 'food'], biz: 'biz1', verified: true, address: 'First floor, Vastrapur, Ahmedabad', desc: 'Two hundred board games, thin-crust pizza and staff who will teach you Catan again.', perks: [{ title: 'Table fee discount', kind: 'flat', value: 100, minGroup: 4, days: [1, 2, 3, 4, 5], endMinute: 18 * 60, description: 'Off the table fee for groups of 4 or more.' }] },
+  court7: { name: 'Court 7 Sports Hub', area: 'Bodakdev', type: 'Sports court', cats: ['badminton', 'gym', 'run'], biz: 'biz2', verified: true, address: 'Bodakdev, Ahmedabad (sports complex)', desc: 'Six wooden badminton courts, a small gym and a running track.', perks: [{ title: 'First court hour free', kind: 'freebie', minLevel: 2, description: 'For members who have finished their first meetup.' }] },
+  haveli: { name: 'Old City Heritage Café', area: 'Old City', type: 'Public café', cats: ['food', 'explore', 'photo'], biz: 'biz3', verified: false, address: 'Pol area, Old City, Ahmedabad', desc: 'Courtyard café in a restored haveli. Awaiting verification.', perks: [] },
 };
+
+// Verified partner venues with level-unlocked perks (venues fund the discount; XP is never spent).
+// Ahmedabad venues sit in the pilot city areas; the Indore ones carry their own coordinates (`at`)
+// because seed.js AREAS (city areas in the taxonomy) cover the Ahmedabad pilot only.
+const PARTNER_BIZ = {
+  biz4: { name: 'Lantern Hospitality (demo)', kind: 'venue', owner: 'kavya', status: 'verified', plan: 'venue', email: 'hello@lantern-demo.example', contact: 'Kavya', phone: '+910000000105', age: 16 },
+  biz5: { name: 'Malwa Cafés (demo)', kind: 'venue', owner: 'arjun', status: 'verified', plan: 'venue', email: 'hello@malwa-demo.example', contact: 'Arjun', phone: '+910000000106', age: 12 },
+};
+const PARTNER_VENUES = {
+  lantern: { name: 'Lantern Lane Café', area: 'Navrangpura', type: 'Public café', cats: ['chai', 'cowork', 'study'], biz: 'biz4', verified: true, address: 'Near Stadium Circle, Navrangpura, Ahmedabad', desc: 'Bright café with big shared tables, quick Wi-Fi and a good masala chai.',
+    perks: [
+      { title: 'Happy hour for groups', kind: 'percent', value: 15, days: [1, 2, 3, 4], startMinute: 16 * 60, endMinute: 19 * 60, description: 'Food and drinks for Come Over groups.' },
+      { title: 'Free masala chai refill', kind: 'freebie', minLevel: 2, description: 'One refill each for the whole group.' },
+    ] },
+  lakeview: { name: 'Lakeview Board Room', area: 'Vastrapur', type: 'Board-game café', cats: ['boardgames', 'gaming', 'food'], biz: 'biz4', verified: true, address: 'Opposite Vastrapur Lake, Ahmedabad', desc: 'Board-game café by the lake with 150 games and staff who explain the rules.',
+    perks: [
+      { title: 'Weekend table deal', kind: 'flat', value: 150, minGroup: 4, days: [0, 6], startMinute: 11 * 60, description: 'Off the table fee for groups of 4 or more.' },
+      { title: 'Explorer discount', kind: 'percent', value: 20, minLevel: 4, description: 'For regulars who try new things.' },
+    ] },
+  gully: { name: 'Garden Gully Kitchen', area: 'Law Garden', type: 'Restaurant', cats: ['food', 'walk', 'photo'], biz: 'biz4', verified: true, address: 'Law Garden, Ellisbridge, Ahmedabad', desc: 'Street-food style kitchen next to the Law Garden market.',
+    perks: [
+      { title: 'Free kulfi for the table', kind: 'freebie', minGroup: 3, startMinute: 18 * 60, endMinute: 23 * 60, description: 'For groups of 3 or more, evenings only.' },
+      { title: 'Reliable regulars', kind: 'percent', value: 10, minLevel: 3, minShowUpRate: 0.9, description: 'For people who show up when they say they will.' },
+    ] },
+  saffron: { name: 'Saffron Steps Café', area: 'Vijay Nagar', at: [22.7533, 75.8937], type: 'Public café', cats: ['chai', 'cowork', 'music'], biz: 'biz5', verified: true, address: 'Scheme 54, Vijay Nagar, Indore', desc: 'Two-floor café with a small stage for open-mic nights.',
+    perks: [
+      { title: 'Group coffee discount', kind: 'percent', value: 10, minGroup: 3, description: 'For Come Over groups of 3 or more.' },
+      { title: 'Open-mic night deal', kind: 'flat', value: 200, minLevel: 3, days: [5, 6], startMinute: 19 * 60, description: 'Off the bill for groups at the Friday and Saturday open mic.' },
+    ] },
+  poha: { name: 'Palasia Poha House', area: 'Palasia', at: [22.7244, 75.8839], type: 'Street food', cats: ['food', 'walk', 'explore'], biz: 'biz5', verified: true, address: '56 Dukan, New Palasia, Indore', desc: 'Poha, jalebi and chai at the 56 Dukan food street.',
+    perks: [
+      { title: 'Free jalebi plate', kind: 'freebie', minGroup: 2, endMinute: 11 * 60, description: 'Breakfast perk for groups.' },
+      { title: 'Food walk discount', kind: 'percent', value: 15, minLevel: 2, days: [0, 6], description: 'Weekend food walks that start here.' },
+    ] },
+  bookmark: { name: 'Bookmark Study Café', area: 'Bhawarkua', at: [22.6936, 75.8673], type: 'Study café', cats: ['study', 'cowork', 'chai'], biz: 'biz5', verified: true, address: 'Near Bhawarkua Square, Indore', desc: 'Quiet study café with long desks and power at every seat.',
+    perks: [
+      { title: 'Study sprint discount', kind: 'percent', value: 10, days: [1, 2, 3, 4, 5], startMinute: 9 * 60, endMinute: 17 * 60, description: 'Weekday daytime, for study groups.' },
+      { title: 'Free second chai', kind: 'freebie', minLevel: 2, minGroup: 1, description: 'For members who have finished their first meetup.' },
+    ] },
+};
+// Deterministic 6-character perk codes (same alphabet as lib/perks).
+const demoCode = (key) => Array.from({ length: 6 }, (_, i) => CODE_ALPHABET[Math.floor(h01(`code:${key}:${i}`) * CODE_ALPHABET.length) % CODE_ALPHABET.length]).join('');
 
 const CAT_TITLE = {
   chai: 'Chai & chatter', badminton: 'Badminton doubles', gym: 'Gym partner session', walk: 'Evening walk', run: 'Easy run', cowork: 'Coworking sprint',
@@ -131,7 +175,7 @@ const CAT_TITLE = {
 function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId = TEST_USER_ID }) {
   const M = models();
   const T = timeHelpers(now);
-  const VENUES = JSON.parse(JSON.stringify(BASE_VENUES)); // local copy: coordinates / the optional test-owner venue are per call
+  const VENUES = JSON.parse(JSON.stringify({ ...BASE_VENUES, ...PARTNER_VENUES })); // local copy: coordinates / the optional test-owner venue are per call
   const items = [];
   const ids = { user: {}, activity: {}, venue: {}, business: {}, campaign: {}, circle: {}, conversation: {}, report: {}, expense: {}, message: {}, notification: {} };
 
@@ -155,6 +199,7 @@ function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId =
     biz1: { name: 'Riverside & Dice Hospitality (demo)', kind: 'venue', owner: 'ishita', status: 'verified', plan: 'venue', email: 'ops@riverside-demo.example', contact: 'Ishita', phone: '+910000000101', age: 28 },
     biz2: { name: 'Bodakdev Sports & Cafés (demo)', kind: 'club', owner: 'vikram', status: 'verified', plan: null, email: 'hello@bodakdev-demo.example', contact: 'Vikram', phone: '+910000000102', age: 20 },
     biz3: { name: 'Heritage Hospitality (demo)', kind: 'venue', owner: 'dev', status: 'pending', plan: null, email: 'dev@heritage-demo.example', contact: 'Dev', phone: '+910000000103', age: 2 },
+    ...PARTNER_BIZ,
   };
   Object.entries(BIZ).forEach(([k, b]) => {
     ids.business[k] = did('business', k);
@@ -193,10 +238,10 @@ function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId =
       staff: [{ userId: ME, role: 'owner' }],
       createdAt: T.ago(10 * DAY),
     });
-    VENUES.moon = { name: 'The Cowork Chai Room', area: 'Navrangpura', type: 'Public café', cats: ['cowork', 'chai', 'study'], biz: 'bizT', verified: true, address: 'Navrangpura, Ahmedabad', desc: 'Day-pass coworking tables inside a café. Demo venue owned by the test account.', offer: { title: 'Free chai refill for Come Over coworking groups', terms: 'Groups of 3+.' } };
+    VENUES.moon = { name: 'The Cowork Chai Room', area: 'Navrangpura', type: 'Public café', cats: ['cowork', 'chai', 'study'], biz: 'bizT', verified: true, address: 'Navrangpura, Ahmedabad', desc: 'Day-pass coworking tables inside a café. Demo venue owned by the test account.', perks: [{ title: 'Free chai refill', kind: 'freebie', minGroup: 3, description: 'For coworking groups of 3 or more.' }] };
   }
   Object.entries(VENUES).forEach(([k, v]) => {
-    const c = near(v.area, `venue:${k}`, 0.0025);
+    const c = v.at ? { lat: v.at[0], lng: v.at[1] } : near(v.area, `venue:${k}`, 0.0025);
     ids.venue[k] = did('venue', k);
     v.lat = c.lat;
     v.lng = c.lng;
@@ -213,11 +258,35 @@ function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId =
       description: v.desc,
       isPublicPlace: true,
       bookingUrl: `https://example.com/venues/${k}`,
-      offers: v.offer ? [v.offer] : [],
+      offers: [], // legacy field; perks are VenueOffer documents
       verified: v.verified,
       createdAt: T.ago(((BIZ[v.biz] || { age: 10 }).age - 1) * DAY),
     });
+    (v.perks || []).forEach((o, i) => {
+      add('VenueOffer', {
+        _id: did('offer', `${k}:${i}`),
+        venueId: ids.venue[k],
+        businessId: ids.business[v.biz],
+        title: o.title,
+        description: o.description || null,
+        kind: o.kind,
+        value: o.kind === 'freebie' ? null : o.value,
+        minGroup: o.minGroup ?? 2,
+        minLevel: o.minLevel ?? 1,
+        minShowUpRate: o.minShowUpRate ?? 0.8,
+        days: o.days || [0, 1, 2, 3, 4, 5, 6],
+        startMinute: o.startMinute ?? 0,
+        endMinute: o.endMinute ?? 1440,
+        validFrom: null,
+        validTo: null,
+        perUserPerWeek: o.perUserPerWeek ?? 1,
+        status: 'active',
+        createdBy: U((BIZ[v.biz] || {}).owner) || ME,
+        createdAt: T.ago(((BIZ[v.biz] || { age: 10 }).age - 2) * DAY),
+      });
+    });
   });
+  ids.offer = Object.fromEntries(Object.entries(VENUES).flatMap(([k, v]) => (v.perks || []).map((_, i) => [`${k}:${i}`, did('offer', `${k}:${i}`)])));
 
   // ---- plans ---------------------------------------------------------------
   const plans = new Map();
@@ -792,6 +861,58 @@ function buildDataset({ now = new Date(), testUserOwnsVenue = false, tax, meId =
     add('SponsoredCampaign', { _id: campT, businessId: ids.business.bizT, activityId: null, title: 'Coworking mornings at The Cowork Chai Room', audience: { areas: ['Navrangpura'], categories: ['cowork', 'chai'] }, budgetMinor: 200000, spentMinor: clicksT * 1200, currency: 'INR', startsAt: T.ago(9 * DAY), endsAt: T.ahead(14 * DAY), status: 'active', label: 'Sponsored', createdBy: ME, createdAt: T.ago(10 * DAY) });
   }
 
+  // ---- partner perks: verified visits (staff-confirmed codes) and table holds ------------------------
+  const venueOfOffer = (ok) => ok.split(':')[0];
+  const VISITS = [
+    ['aarav', 'chaihouse:0', 2, 4], ['meera', 'roast:0', 3, 1], ['diya', 'court7:0', 4, 2], ['saanvi', 'lantern:0', 6, 3],
+    ['anaya', 'gully:0', 8, 3], ['ishita', 'lakeview:0', 10, 5], ['kavya', 'lantern:1', 12, 2], ['ME', 'chaihouse:0', 3, 3],
+  ];
+  VISITS.forEach(([uk, ok, daysAgo, groupSize]) => {
+    const vk = venueOfOffer(ok);
+    const at = new Date(T.ago(daysAgo * DAY).getTime() - 2 * HOUR);
+    const staff = U((BIZ[VENUES[vk].biz] || {}).owner) || ME;
+    add('OfferRedemption', {
+      _id: did('redemption', `${uk}:${ok}`),
+      offerId: ids.offer[ok],
+      venueId: ids.venue[vk],
+      businessId: ids.business[VENUES[vk].biz],
+      userId: U(uk),
+      activityId: null,
+      code: demoCode(`${uk}:${ok}`),
+      status: 'redeemed',
+      issuedAt: new Date(at.getTime() - 4 * MIN),
+      expiresAt: new Date(at.getTime() + 16 * MIN),
+      redeemedAt: at,
+      redeemedBy: staff,
+      groupSize,
+      weekKey: perkWeekKey(at),
+      createdAt: new Date(at.getTime() - 4 * MIN),
+    });
+  });
+  const hold = (planKey, status, partySize, note, hoursAgo) => {
+    const p = plans.get(planKey);
+    const vk = p.venue;
+    add('TableHold', {
+      _id: did('hold', planKey),
+      activityId: p.id,
+      venueId: ids.venue[vk],
+      businessId: ids.business[VENUES[vk].biz],
+      hostUserId: U(p.host),
+      partySize,
+      note,
+      startsAt: p.start,
+      status,
+      respondedAt: status === 'requested' ? null : T.ago((hoursAgo - 1) * HOUR),
+      respondedBy: status === 'requested' ? null : U((BIZ[VENUES[vk].biz] || {}).owner) || ME,
+      declineReason: null,
+      createdAt: T.ago(hoursAgo * HOUR),
+    });
+  };
+  // The test account's hosted plan: confirmed at Sabarmati Chai House, or waiting for the test account
+  // itself to answer in the business hub when it owns the venue (--test-user-owns-venue).
+  hold('host_cowork', testUserOwnsVenue ? 'requested' : 'confirmed', 5, 'Corner table near the sockets, please.', 6);
+  hold('chai_now', 'requested', 4, null, 2);
+
   // ---- audit log ----------------------------------------------------------------------------------
   let au = 0;
   const audit = (by, action, targetType, targetId, metadata, agoH) => {
@@ -947,6 +1068,9 @@ async function removeVenueOwnerDocs() {
     M.CampaignMetric.deleteMany({ campaignId: campT }),
     M.Entitlement.deleteOne({ _id: did('ent', 'venue-me') }),
     M.BusinessInvoice.deleteOne({ _id: did('inv', 'me') }),
+    M.VenueOffer.deleteMany({ venueId: venueT }),
+    M.OfferRedemption.deleteMany({ venueId: venueT }),
+    M.TableHold.deleteMany({ venueId: venueT, _id: { $ne: did('hold', 'host_cowork') } }), // host_cowork's hold moves back to its default venue
   ]);
 }
 
@@ -981,6 +1105,8 @@ async function resetDemo() {
     ['ActivityFeedback', { activityId: DEMO_ID_RE }], ['ReliabilityEvent', { activityId: DEMO_ID_RE }], ['XpEvent', { activityId: DEMO_ID_RE }],
     ['Report', { $or: [{ reportedUserId: DEMO_ID_RE }, { activityId: DEMO_ID_RE }] }], ['Block', { $or: [{ blockedUserId: DEMO_ID_RE }, { blockerUserId: DEMO_ID_RE }] }],
     ['Expense', { activityId: DEMO_ID_RE }],
+    ['VenueOffer', { venueId: DEMO_ID_RE }], ['OfferRedemption', { $or: [{ venueId: DEMO_ID_RE }, { userId: DEMO_ID_RE }] }],
+    ['TableHold', { $or: [{ activityId: DEMO_ID_RE }, { venueId: DEMO_ID_RE }] }],
   ];
   const swept = {};
   for (const [name, filter] of sweep) {

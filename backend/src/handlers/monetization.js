@@ -23,7 +23,8 @@ const IST_OFFSET_MS = 330 * 60000;
 const VERIFICATION_TO_STATUS = { pending: 'in_review', verified: 'verified', rejected: 'rejected', suspended: 'suspended' };
 
 // ----- presenters -----
-function presentVenue(v, { business = null, sponsored = false, distanceM = null } = {}) {
+// offers: presented VenueOffer list (services/perks.offersForVenues); the legacy Mixed `offers` field is ignored.
+function presentVenue(v, { business = null, sponsored = false, distanceM = null, offers = [] } = {}) {
   return {
     id: v._id,
     name: v.name,
@@ -32,7 +33,7 @@ function presentVenue(v, { business = null, sponsored = false, distanceM = null 
     venueType: v.venueType || null,
     categories: v.categorySlugs || [],
     description: v.description || null,
-    offers: v.offers || [],
+    ...require('../services/perks').venueOfferFields(offers),
     bookingUrl: v.bookingUrl || null,
     verified: !!v.verified,
     sponsored: !!sponsored,
@@ -280,15 +281,17 @@ const routes = {
     if (!b || !v) throw err.notFound('no_venue', 'Set up your venue first');
     const role = ((b.staff || []).find((s) => s.userId === user.id) || {}).role || 'staff';
     const where = plansAtVenue(v);
-    const [ents, sponsored, pendingInvoice, plans, planCount] = await Promise.all([
+    const [ents, sponsored, pendingInvoice, plans, planCount, offers] = await Promise.all([
       ent.getActive(b.ownerUserId),
       SponsoredCampaign.exists({ businessId: b._id, status: 'active' }),
       BusinessInvoice.exists({ businessId: b._id, status: 'created', createdAt: { $gt: new Date(Date.now() - 86400000) } }),
       Activity.find({ ...where, status: { $in: ['open', 'full', 'in_progress'] }, endsAt: { $gt: new Date() } }).sort({ startsAt: 1 }).limit(10).lean(),
       Activity.countDocuments({ ...where, status: { $ne: 'moderated' } }),
+      // What app users see right now (empty until the venue is verified); manage offers at /business/offers.
+      require('../services/perks').offersForVenues([v], { biz: new Map([[b._id, b]]) }),
     ]);
     return {
-      ...presentVenue(v, { business: b, sponsored: !!sponsored }),
+      ...presentVenue(v, { business: b, sponsored: !!sponsored, offers: offers.get(v._id) || [] }),
       status: VERIFICATION_TO_STATUS[b.verificationStatus] || 'in_review',
       planId: b.planId || 'venue',
       planStatus: ents.includes('venue') ? 'active' : pendingInvoice ? 'payment_processing' : 'none',
@@ -371,7 +374,8 @@ const routes = {
   },
 
   'GET /v1/business/analytics': async (req) => {
-    const { Venue, Activity, ActivityDailyMetric, Participant, SponsoredCampaign, CampaignMetric } = require('../models');
+    const { Venue, Activity, ActivityDailyMetric, Participant, SponsoredCampaign, CampaignMetric, OfferRedemption } = require('../models');
+    const perks = require('../lib/perks');
     const user = await requireUser(req);
     const q = check({ venueId: { type: 'string', format: 'uuid' }, businessId: { type: 'string', format: 'uuid' }, range: { type: 'string', enum: ['7d', '30d', '90d'], default: '30d' } }, req.query);
     const b = await myBusiness(user.id, q.businessId);
@@ -387,7 +391,9 @@ const routes = {
     const hostOf = new Map(acts.map((a) => [a._id, a.hostUserId]));
     const campaignIds = (await SponsoredCampaign.find({ businessId: b._id }).select('_id').lean()).map((c) => c._id);
 
-    const [views, parts, cm] = await Promise.all([
+    const nowDate = new Date();
+    const visits = { venueId: venue._id, status: 'redeemed' };
+    const [views, parts, cm, visitsWeek, visitsMonth] = await Promise.all([
       actIds.length
         ? ActivityDailyMetric.aggregate([{ $match: { activityId: { $in: actIds }, day: { $in: allDays } } }, { $group: { _id: '$day', views: { $sum: '$views' } } }])
         : [],
@@ -400,6 +406,9 @@ const routes = {
       campaignIds.length
         ? CampaignMetric.aggregate([{ $match: { campaignId: { $in: campaignIds }, day: { $in: allDays } } }, { $group: { _id: '$day', impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' } } }])
         : [],
+      // Verified partner visits = perk codes confirmed by staff (IST week from Sunday, IST calendar month).
+      OfferRedemption.countDocuments({ ...visits, redeemedAt: { $gte: perks.istWeekStart(nowDate) } }),
+      OfferRedemption.countDocuments({ ...visits, redeemedAt: { $gte: perks.istMonthStart(nowDate) } }),
     ]);
 
     const perDay = new Map(allDays.map((d) => [d, { planViews: 0, joins: 0, checkIns: 0, impressions: 0, clicks: 0 }]));
@@ -429,6 +438,7 @@ const routes = {
       series: Object.fromEntries(KEYS.map((k) => [k, cur.days.map((d) => perDay.get(d)[k])])),
       totals: sum(cur.days),
       previousTotals: sum(prev.days),
+      verifiedVisits: { week: visitsWeek, month: visitsMonth },
       note: 'Attributable actions only. We never guarantee attendance.',
     };
   },
@@ -479,4 +489,4 @@ const routes = {
   },
 };
 
-module.exports = { routes, presentVenue, presentCampaign, presentBusiness, applyPurchase: billing.applyPurchase };
+module.exports = { routes, presentVenue, presentCampaign, presentBusiness, myBusiness, applyPurchase: billing.applyPurchase };

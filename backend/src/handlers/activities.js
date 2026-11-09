@@ -416,6 +416,8 @@ const routes = {
       for (const r of affected) {
         await notify(session, after, r.userId, { type: 'activity', title: 'Plan cancelled', body: `"${a.title}" was cancelled by the host.`, data: { activityId: a._id, target: { screen: 'activity_detail', params: { id: a._id } } } });
       }
+      // A table the partner venue was holding for this plan is released (the venue is told).
+      await require('../services/perks').cancelHolds(session, after, [a._id], { reason: 'The host cancelled the plan.' });
       await audit({ actorUserId: user.id, action: 'activity.cancel', targetType: 'activity', targetId: a._id, metadata: { reason }, ip: req.ip }, { session });
       publishActivity(after, a._id, { status: 'cancelled' });
     });

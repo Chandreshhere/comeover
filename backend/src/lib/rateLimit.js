@@ -25,6 +25,8 @@ const LIMITS = {
   data_export: { capacity: 3, perDay: 3 },
   assistant: { capacity: 10, perMinute: 10 },
   search: { capacity: 60, perMinute: 60 },
+  offer_redeem: { capacity: 30, perHour: 30 },
+  redemption_confirm: { capacity: 30, perMinute: 30 },
 };
 
 function ratePerSec(l) {

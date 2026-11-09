@@ -57,6 +57,13 @@ async function firstMet(userId, activityIds, session) {
   return [...first.entries()].map(([uid, day]) => ({ userId: uid, day }));
 }
 
+// IST days of the user's verified partner visits (redemptions confirmed by venue staff).
+async function partnerVisitDays(userId, session) {
+  const { OfferRedemption } = require('../models');
+  const rows = await sess(OfferRedemption.find({ userId, status: 'redeemed' }).select('redeemedAt'), session).lean();
+  return rows.filter((r) => r.redeemedAt).map((r) => istDate(new Date(r.redeemedAt)));
+}
+
 async function reliability(userId, session) {
   const { ReliabilityEvent } = require('../models');
   const rows = await sess(ReliabilityEvent.find({ userId, kind: { $in: ['attended', 'no_show', 'late_cancel'] } }).select('kind'), session).lean();
@@ -69,7 +76,7 @@ async function reliability(userId, session) {
 // Stats object consumed by evaluateQuest (see lib/quests.js).
 async function computeStats(userId, { now = new Date(), session } = {}) {
   const done = await completions(userId, session);
-  const [met, rel] = await Promise.all([firstMet(userId, done.map((r) => r.id), session), reliability(userId, session)]);
+  const [met, rel, visits] = await Promise.all([firstMet(userId, done.map((r) => r.id), session), reliability(userId, session), partnerVisitDays(userId, session)]);
   const today = istDate(now);
   const wk = weekStart(now);
   const inDay = (d) => d === today;
@@ -82,6 +89,7 @@ async function computeStats(userId, { now = new Date(), session } = {}) {
     newCategories: Object.values(firstCat).filter(pred).length,
     hostedCompleted: done.filter((r) => r.hosted && pred(r.day)).length,
     startHours: done.filter((r) => pred(r.day)).map((r) => r.startHour),
+    partnerVisits: visits.filter(pred).length,
   });
   const categoryCounts = {};
   for (const r of done) if (r.category) categoryCounts[r.category] = (categoryCounts[r.category] || 0) + 1;
@@ -102,6 +110,9 @@ async function freezeDays(userId, { now = new Date(), session } = {}) {
   const rows = await sess(StreakFreeze.find({ userId, day: { $gt: since } }).select('day'), session).lean();
   return rows.map((r) => r.day);
 }
+
+// Level from total XP and the Level collection rows ({ level, name, next }); level 1 when no levels exist.
+const levelOf = (xpTotal, levels) => (levels && levels.length ? levelForXp(xpTotal || 0, levels) : { level: 1, name: 'Newcomer', next: null });
 
 async function progressFor(userId, { now = new Date(), session, stats: given } = {}) {
   const { User, Level, XpDailyTotal } = require('../models');
@@ -148,7 +159,7 @@ async function progressFor(userId, { now = new Date(), session, stats: given } =
     else break;
   }
   const freezesThisWeek = freezes.filter((d) => d >= wk).length;
-  const lvl = levels.length ? levelForXp(xpTotal, levels) : { level: 1, name: 'Newcomer', next: null };
+  const lvl = levelOf(xpTotal, levels);
 
   return {
     xp: xpTotal,
@@ -197,4 +208,4 @@ async function questsFor(userId, { kind, stats, now = new Date(), session } = {}
 
 const stripStats = ({ _stats, ...rest }) => rest;
 
-module.exports = { DAY_LABELS, addDays, completions, firstMet, reliability, computeStats, freezeDays, progressFor, questsFor, stripStats };
+module.exports = { DAY_LABELS, addDays, completions, firstMet, partnerVisitDays, reliability, levelOf, computeStats, freezeDays, progressFor, questsFor, stripStats };

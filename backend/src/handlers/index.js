@@ -5,7 +5,7 @@ const logger = require('../logger');
 const { mountRoutes } = require('../lib/http');
 
 // Order matters only within a module (register literal segments like /me before /{id}).
-const MODULES = ['auth', 'profile', 'discovery', 'activities', 'assistant', 'circles', 'messaging', 'progress', 'expenses', 'safety', 'monetization', 'webhooks', 'admin'];
+const MODULES = ['auth', 'profile', 'discovery', 'activities', 'assistant', 'circles', 'messaging', 'progress', 'expenses', 'safety', 'monetization', 'partners', 'webhooks', 'admin', 'insights'];
 
 function load(name) {
   try {

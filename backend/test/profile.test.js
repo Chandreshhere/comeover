@@ -310,3 +310,22 @@ test('DELETE /me: deactivates, cancels hosted plans, leaves joined plans (counte
   assert.equal(await Session.countDocuments({ userId: u.id, revokedAt: null }), 0);
   assert.equal((await call('GET', '/v1/me', u.token)).body.code, 'account_deleted');
 });
+
+test('GET /cities lists every seeded city with areas; a saved home city drives bootstrap', async (t) => {
+  if (skip) return t.skip(skip);
+  const u = await makeUser();
+  const r = await call('GET', '/v1/cities', u.token);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const names = r.body.items.map((c) => c.name);
+  for (const c of ['Ahmedabad', 'Indore', 'Mumbai', 'Delhi', 'Bengaluru', 'Hyderabad', 'Pune', 'Kolkata', 'Chennai']) assert.ok(names.includes(c), `missing ${c}`);
+  assert.deepEqual([...names].sort(), names, 'alphabetical');
+  const indore = r.body.items.find((c) => c.name === 'Indore');
+  assert.ok(indore.areas.some((a) => a.name === 'Vijay Nagar'));
+  assert.ok(indore.center.lat > 22 && indore.center.lat < 23.2 && indore.center.lng > 75.5 && indore.center.lng < 76.2);
+  assert.equal((await call('GET', '/v1/cities')).status, 401);
+
+  const v = await makeUser({ profile: profileDoc('Riya', { homeCity: 'Indore', homeArea: 'Palasia' }) });
+  const b = await call('GET', '/v1/me/bootstrap', v.token);
+  assert.equal(b.body.city.name, 'Indore');
+  assert.ok(b.body.city.areas.some((a) => a.name === 'Palasia'));
+});

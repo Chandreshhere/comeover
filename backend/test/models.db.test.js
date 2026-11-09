@@ -113,13 +113,15 @@ test('XP: idempotent awards, daily cap, level-up from the Level collection', asy
 
 test('seed is idempotent', async (t) => {
   if (skip) return t.skip(skip);
-  const { seed } = require('../scripts/seed');
+  const { seed, CITY_AREAS } = require('../scripts/seed');
   await seed();
   const second = await seed();
   assert.deepEqual(second, { categories: 0, levels: 0, quests: 0, achievements: 0, cityAreas: 0 });
   const { Category, CityArea } = require('../src/models');
   assert.equal(await Category.countDocuments(), 16);
-  assert.equal(await CityArea.countDocuments(), 9);
+  assert.equal(await CityArea.countDocuments(), CITY_AREAS.length);
+  assert.ok(CITY_AREAS.length > 100, 'main Indian cities are seeded');
+  assert.equal(new Set(CITY_AREAS.map(([c, n]) => `${c}|${n}`)).size, CITY_AREAS.length, 'no duplicate city areas');
 });
 
 test('jobs: enqueue, run, retry with backoff, dedupe', async (t) => {

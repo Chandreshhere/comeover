@@ -249,7 +249,7 @@ test('counters, chat, circles, XP and expenses are internally consistent', async
   assert.ok(expenses.some((e) => e.splitMethod === 'itemised' && e.items.length >= 3 && e.items.every((i) => i.assignees.length)));
 
   // business / billing
-  assert.equal(await M.Venue.countDocuments({ _id: DEMO_ID_RE, verified: true }), 4);
+  assert.equal(await M.Venue.countDocuments({ _id: DEMO_ID_RE, verified: true }), 10, '4 original + 3 Ahmedabad and 3 Indore partner venues');
   assert.equal(await M.Venue.countDocuments({ _id: DEMO_ID_RE, verified: false }), 1);
   const camps = await M.SponsoredCampaign.find({ _id: DEMO_ID_RE }).lean();
   assert.deepEqual(camps.map((c) => c.status).sort(), ['active', 'completed', 'pending_review']);
@@ -363,9 +363,21 @@ test('discovery: feed, privacy, featured, nearby people, venues, my plans', asyn
 
   const venues = await get('/v1/venues?lat=23.037&lng=72.56');
   assert.equal(venues.status, 200);
-  assert.equal(venues.body.items.length, 4, 'four verified partner venues');
+  assert.equal(venues.body.items.length, 7, 'seven verified partner venues in Ahmedabad (Indore is out of range)');
   assert.ok(!venues.body.items.some((v) => v.name === 'Old City Heritage Café'), 'unverified venue is hidden');
-  assert.ok(venues.body.items.every((v) => v.offers.length === 1));
+  assert.ok(venues.body.items.every((v) => v.hasOffer && v.offers.length >= 1 && v.bestOfferLabel), 'every partner venue has a perk');
+  assert.ok(venues.body.items.every((v) => v.offers.every((o) => o.eligibility && !/\u2014/.test(o.window))));
+  const indore = await get('/v1/venues?lat=22.7244&lng=75.8839&hasOffer=true');
+  assert.deepEqual(indore.body.items.map((v) => v.area).sort(), ['Bhawarkua', 'Palasia', 'Vijay Nagar']);
+  const perks = await get('/v1/me/perks?lat=23.037&lng=72.56');
+  assert.equal(perks.status, 200, JSON.stringify(perks.body));
+  assert.equal(perks.body.unlocked.length + perks.body.locked.length, 16);
+  const hold = await get(`/v1/activities/${ids.host_cowork}/table-hold`);
+  assert.equal(hold.body.hold.status, 'confirmed');
+  assert.equal(hold.body.hold.venue.name, 'Sabarmati Chai House');
+  const visits = await get('/v1/me/redemptions');
+  assert.equal(visits.body.items.length, 1);
+  assert.equal(visits.body.items[0].status, 'redeemed');
   assert.ok(venues.body.items.find((v) => v.name === 'Dice & Dough').sponsored);
   const detail = await get(`/v1/venues/${venues.body.items.find((v) => v.name === 'Court 7 Sports Hub').id}`);
   assert.equal(detail.status, 200);
@@ -486,7 +498,7 @@ test('admin console: KPIs, reports, activity review, billing and audit show real
   const camps = await get('/v1/admin/billing/campaigns', { token: adminToken });
   assert.equal(camps.body.campaigns.length, 3);
   assert.equal(camps.body.invoices.length, 2);
-  assert.equal(camps.body.businesses.length, 3);
+  assert.equal(camps.body.businesses.length, 5);
   assert.equal(camps.body.businesses[0].verificationStatus, 'pending', 'pending verification is listed first');
   assert.ok(camps.body.campaigns.find((c) => c.status === 'active').metrics.impressions > 1000);
 
@@ -573,7 +585,7 @@ test('the test account owns a venue only with --test-user-owns-venue, and the fl
   await demo.seedDemo({ testUserOwnsVenue: false });
   assert.equal((await get('/v1/business/venues/me')).status, 404, 'flag off again → venue removed');
   const { Venue } = require('../src/models');
-  assert.equal(await Venue.countDocuments({ _id: DEMO_ID_RE }), 5);
+  assert.equal(await Venue.countDocuments({ _id: DEMO_ID_RE }), 11);
 });
 
 // ---------------------------------------------------------------------------

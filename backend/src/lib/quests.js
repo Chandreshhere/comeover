@@ -4,9 +4,10 @@
 
 // stats shape:
 // { day: Window, week: Window, all: Window & { categoryCounts, reliability, plansConsidered } }
-// Window = { completed, newPeople, newCategories, hostedCompleted, startHours: number[] }
+// Window = { completed, newPeople, newCategories, hostedCompleted, startHours: number[], partnerVisits }
+// partnerVisits = perk redemptions confirmed by partner-venue staff (verified partner visits).
 function emptyWindow() {
-  return { completed: 0, newPeople: 0, newCategories: 0, hostedCompleted: 0, startHours: [] };
+  return { completed: 0, newPeople: 0, newCategories: 0, hostedCompleted: 0, startHours: [], partnerVisits: 0 };
 }
 
 function evaluateQuest(criteria, stats) {
@@ -39,6 +40,10 @@ function evaluateQuest(criteria, stats) {
       break;
     case 'distinct_categories':
       progress = Object.keys(all.categoryCounts || {}).length;
+      break;
+    case 'partner_visits':
+    case 'partnerVisits': // alias
+      progress = w.partnerVisits || 0;
       break;
     case 'reliability':
       progress = (all.plansConsidered || 0) >= (c.minPlans || 0) && (all.reliability || 0) >= (c.min || 1) ? total : 0;

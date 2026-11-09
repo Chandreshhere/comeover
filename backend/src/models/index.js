@@ -39,6 +39,9 @@ module.exports = {
   BusinessProfile: require('./BusinessProfile'),
   Venue: require('./Venue'),
   SponsoredCampaign: require('./SponsoredCampaign'),
+  VenueOffer: require('./VenueOffer'),
+  OfferRedemption: require('./OfferRedemption'),
+  TableHold: require('./TableHold'),
   CampaignMetric: require('./CampaignMetric'),
   ActivityDailyMetric: require('./ActivityDailyMetric'),
   BusinessInvoice: require('./BusinessInvoice'),
@@ -49,4 +52,5 @@ module.exports = {
   Session: require('./Session'),
   Job: require('./Job'),
   RealtimeEvent: require('./RealtimeEvent'),
+  Announcement: require('./Announcement'),
 };
