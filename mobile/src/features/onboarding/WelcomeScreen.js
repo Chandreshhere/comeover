@@ -19,7 +19,7 @@ import Animated, {
   withDelay,
   withTiming,
 } from 'react-native-reanimated';
-import { useIsFocused, useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CalendarCheck } from 'phosphor-react-native/src/icons/CalendarCheck';
 import { HandHeart } from 'phosphor-react-native/src/icons/HandHeart';
@@ -395,6 +395,15 @@ export default function WelcomeScreen() {
     scrollRef.current?.scrollTo({ x: next * width, animated: true });
     setPage(next);
   };
+
+  // Deep link straight to a page: projectirl://welcome?page=1 (0-based).
+  const linkPage = useRoute().params?.page;
+  useEffect(() => {
+    const i = Number(linkPage);
+    if (!Number.isInteger(i) || i < 0 || i >= PAGES.length || !width) return undefined;
+    const t = setTimeout(() => goTo(i), 80); // after the pager has laid out
+    return () => clearTimeout(t);
+  }, [linkPage, width]);
 
   const leave = (params) => {
     voice.stop();

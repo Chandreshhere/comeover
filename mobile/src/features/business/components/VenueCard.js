@@ -28,8 +28,8 @@ export function VerifiedBadge({ verified, light }) {
   );
 }
 
-// Partner venue row: bubble · name + meta · chevron, with the member offer on
-// one line underneath. Hours and details live on the venue page.
+// Partner venue row: bubble · name + meta · chevron, with the best perk as a
+// chip underneath (or the legacy member offer line). Details live on the venue page.
 export default function VenueCard({ venue: v, onPress, onWhy, planCount = 0 }) {
   const meta = [v.kind, v.area, planCount > 0 ? `${planCount} plan${planCount > 1 ? 's' : ''}` : null].filter(Boolean).join(' · ');
   return (
@@ -37,7 +37,7 @@ export default function VenueCard({ venue: v, onPress, onWhy, planCount = 0 }) {
       onPress={onPress}
       elevated={false}
       style={{ borderWidth: 1.2, borderColor: colors.border }}
-      accessibilityLabel={`${v.name}, ${v.kind}${v.area ? ` in ${v.area}` : ''}${v.verified ? ', verified' : ''}${v.sponsored ? ', sponsored' : ''}${planCount > 0 ? `, ${planCount} upcoming plans` : ''}${v.offer ? `. Offer: ${v.offer}` : ''}`}
+      accessibilityLabel={`${v.name}, ${v.kind}${v.area ? ` in ${v.area}` : ''}${v.verified ? ', verified' : ''}${v.sponsored ? ', sponsored' : ''}${planCount > 0 ? `, ${planCount} upcoming plans` : ''}${v.bestOfferLabel || v.offer ? `. Offer: ${v.bestOfferLabel || v.offer}` : ''}`}
     >
       {v.sponsored && <SponsoredLabel onWhy={onWhy} style={{ marginBottom: space.sm }} />}
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -55,7 +55,16 @@ export default function VenueCard({ venue: v, onPress, onWhy, planCount = 0 }) {
         </View>
         <Icon name="chevron-right" size={18} color={colors.muted} />
       </View>
-      {!!v.offer && (
+      {v.bestOfferLabel ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm, paddingTop: space.sm, borderTopWidth: 1, borderTopColor: colors.border }}>
+          <Tag label={v.bestOfferLabel} icon="ticket" bg={colors.orangeSoft} fg={colors.ink} />
+          {(v.perks?.length || 0) > 1 && (
+            <AppText variant="caption" color={colors.muted} style={{ marginLeft: space.xs }} numberOfLines={1}>
+              +{v.perks.length - 1} more
+            </AppText>
+          )}
+        </View>
+      ) : !!v.offer && (
         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm, paddingTop: space.sm, borderTopWidth: 1, borderTopColor: colors.border }}>
           <Icon name="gift" size={16} weight="duotone" color={colors.ink} duotoneColor={colors.orange} />
           <AppText variant="label" color={colors.inkSoft} style={{ marginLeft: space.xs, flex: 1 }} numberOfLines={1}>

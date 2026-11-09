@@ -89,7 +89,7 @@ export default function ProfileSetupScreen() {
           label="Short bio (optional)"
           value={bio}
           onChangeText={setBio}
-          placeholder="New in Ahmedabad, always up for chai and a walk."
+          placeholder="New in town, always up for chai and a walk."
           multiline
           maxLength={240}
           helper="No phone numbers or social handles."

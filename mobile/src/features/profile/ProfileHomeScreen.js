@@ -343,6 +343,7 @@ function OwnProfile() {
       <Card padding={0} style={{ paddingHorizontal: space.md }}>
         <MenuRow icon="calendar" tone="periwinkle" title="My plans" sub={plansLine} onPress={() => nav.navigate('my_activities')} />
         <MenuRow icon="map-trifold" tone="lavender" title="Social roadmap" sub={lvl.next ? `${lvl.next.xp - progress.xp} XP to ${lvl.next.name}` : 'Top level reached'} onPress={() => nav.navigate('social_roadmap')} />
+        <MenuRow icon="ticket" tone="pink" title="Your perks" sub="Partner perks unlock as you level up" onPress={() => nav.navigate('my_perks')} />
         <MenuRow icon="fire" tone="orange" title="Quests & streak" sub={`${progress.streakWeeks}-week streak · ${progress.weeklyDone}/${progress.weeklyGoal} this week`} onPress={() => nav.navigate('quest_home')} />
         <MenuRow icon="award" tone="mint" title="Badges" sub={badgesLine} onPress={() => nav.navigate('achievements')} last />
       </Card>

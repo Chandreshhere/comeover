@@ -17,7 +17,8 @@ import * as Auth from '@/api/auth';
 import { clearSession, hasSession, loadSession, onSignedOut, saveSession } from '@/api/session';
 import { suggest } from '@/api/assistant';
 import config, { isConfigured } from '@/config';
-import { applyTaxonomy, areaCentroids, categoryBySlug, CITY_CENTER, levels as levelTable, setUserSource } from '@/data/catalog';
+import { applyTaxonomy, areaCentroids, categoryBySlug, CITY, CITY_CENTER, levels as levelTable, setUserSource } from '@/data/catalog';
+import { loadCities, nearestCity } from '@/data/cities';
 import realtime from '@/services/realtime';
 import { getCoarsePosition } from '@/services/location';
 import { planCompat, rankPeople, SOCIAL_STYLES } from '@/utils/socialMatch';
@@ -39,6 +40,9 @@ export const initialDraft = {
   area: '',
   venueName: '',
   venueType: 'Public café',
+  venueId: null, // verified partner venue picked on the place step
+  partnerName: null, // that venue's name, so clearing the pick can clear the name too
+  tableHold: true, // ask that partner venue to hold a table after publishing
   capacity: 4,
   joinRule: 'approval', // approval | instant
   audience: 'everyone', // everyone | circle | invite_only
@@ -284,9 +288,28 @@ export const useAppStore = create(
           if (c && (!prefs.coords || c.latitude !== prefs.coords.latitude || c.longitude !== prefs.coords.longitude)) {
             set((s) => ({ prefs: { ...s.prefs, coords: c } }));
           }
-          if (c) return c;
+          if (c) {
+            syncCityFromCoords(c);
+            return c;
+          }
         }
         return areaCentroids[profile.area] || CITY_CENTER;
+      };
+
+      // With location on, follow the user to whichever covered city they are in
+      // (once per app session): areas, pickers and the fallback centre switch to
+      // that city and the home area becomes its nearest neighbourhood.
+      let citySynced = false;
+      const syncCityFromCoords = (c) => {
+        if (citySynced || !c) return;
+        citySynced = true;
+        loadCities()
+          .then((list) => {
+            const hit = nearestCity(list, c.latitude, c.longitude);
+            if (!hit || hit.city.name === CITY.name) return;
+            get().setHomeArea(hit.area, hit.city);
+          })
+          .catch(() => null);
       };
 
       const handleRealtime = (raw) => {
@@ -445,6 +468,17 @@ export const useAppStore = create(
         },
 
         // ---------- profile & prefs ----------
+        // Home city + area in one step (city/area picker, location match).
+        // `city` is a GET /cities item; the catalog switches immediately so every
+        // area list and the map centre follow, and the feed reloads around it.
+        setHomeArea: (area, city) => {
+          if (city && city.name && city.name !== CITY.name) applyTaxonomy({ city });
+          const patch = { area };
+          if (city && city.name) patch.city = city.name;
+          get().setProfile(patch);
+          quiet(get().loadFeed({ silent: true }));
+        },
+
         setProfile: (patch) => {
           set((s) => ({ profile: { ...s.profile, ...patch } }));
           const { avatarUri, avatarSeed, id, ...server } = patch; // avatarUri is a display URL; avatarKey is what the server stores
@@ -656,6 +690,7 @@ export const useAppStore = create(
             area: d.area || get().profile.area,
             venueName: d.venueName,
             venueType: d.venueType,
+            venueId: d.venueId || undefined,
             joinRule: d.joinRule,
             visibility: d.audience === 'everyone' ? 'public' : d.audience === 'circle' ? 'circle' : 'invite_only',
             circleId: d.audience === 'circle' ? d.circleId : undefined,

@@ -1,6 +1,7 @@
 // business_analytics — impressions, joins, check-ins and attributable actions.
 // Data: GET /business/analytics?venueId&range → { venue, labels?, days?, series:{impressions,joins,checkIns,actions,planViews?},
-//        totals?, previousTotals? } and GET /business/campaigns.
+//        totals?, previousTotals?, verifiedVisits?: { week, month } } and GET /business/campaigns.
+// Partner perks: rows to check a code, manage offers and answer table requests.
 import React, { useMemo, useState } from 'react';
 import { RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -119,6 +120,7 @@ export default function BusinessAnalyticsScreen() {
     [data, series]
   );
   const prev = data?.previousTotals || {};
+  const visits = data?.verifiedVisits && typeof data.verifiedVisits === 'object' ? data.verifiedVisits : null;
   const campaigns = campaignsQ.data || [];
   const hasSeries = n >= 2;
 
@@ -150,7 +152,14 @@ export default function BusinessAnalyticsScreen() {
         />
       }
     >
-      <Segmented options={RANGES} value={range} onChange={setRange} style={{ marginTop: space.xs }} />
+      {/* Partner perks: staff tools */}
+      <ListGroup style={{ marginTop: space.xs }}>
+        <ListRow icon="qr-code" iconBg={colors.orangeSoft} title="Check a code" subtitle="Confirm a member's perk" onPress={() => nav.navigate('business_redeem')} />
+        <ListRow icon="ticket" iconBg={colors.mint} title="Offers" subtitle="Create and manage perks" onPress={() => nav.navigate('business_offers')} />
+        <ListRow icon="calendar-check" iconBg={colors.periwinkleWash} title="Table requests" subtitle="Confirm or decline" onPress={() => nav.navigate('business_holds')} last />
+      </ListGroup>
+
+      <Segmented options={RANGES} value={range} onChange={setRange} style={{ marginTop: space.lg }} />
 
       <QueryState status={analyticsQ.status} error={analyticsQ.error} hasData={!!data} onRetry={analyticsQ.reload} skeletonRows={3} skeletonHeight={120} style={{ marginTop: space.md }}>
         <>
@@ -163,6 +172,12 @@ export default function BusinessAnalyticsScreen() {
               <Kpi label="Check-ins" value={totals.checkIns} prev={prev.checkIns} rangeLabel={rangeLabel} />
               <Kpi label="Offer redemptions" value={totals.actions} prev={prev.actions} rangeLabel={rangeLabel} />
             </View>
+            {visits && (
+              <View style={{ flexDirection: 'row', gap: space.sm }}>
+                <Kpi label="Verified visits, week" value={Number(visits.week) || 0} rangeLabel={rangeLabel} />
+                <Kpi label="Verified visits, month" value={Number(visits.month) || 0} rangeLabel={rangeLabel} />
+              </View>
+            )}
           </Animated.View>
 
           <SectionHeader title="Daily trend" />

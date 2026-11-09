@@ -5,7 +5,8 @@ import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { AppText, Avatar, Button, Chip, ChipGrid, ListGroup, ListRow, Screen, ScreenHeader, SectionHeader, Sheet, TextField } from '@/components';
-import { CITY, categories } from '@/data/catalog';
+import { applyTaxonomy, CITY, categories } from '@/data/catalog';
+import CityAreaPicker from '@/features/onboarding/components/CityAreaPicker';
 import { normalizeAvatar } from '@/illustrations/avatarPresets';
 import * as E from '@/api/endpoints';
 import { useAppStore } from '@/store/useAppStore';
@@ -29,6 +30,7 @@ export default function ProfileEditScreen() {
   const [pronouns, setPronouns] = useState(profile.pronouns || '');
   const [boundaries, setBoundaries] = useState(profile.boundaries || '');
   const [area, setArea] = useState(profile.area);
+  const [homeCity, setHomeCity] = useState(null); // a GET /cities item once the city changes
   const [interests, setInterests] = useState(profile.interests);
   const [languages, setLanguages] = useState(profile.languages || []);
   const [avatarSeed, setAvatarSeed] = useState(profile.avatarSeed);
@@ -48,11 +50,12 @@ export default function ProfileEditScreen() {
       pronouns !== (profile.pronouns || '') ||
       boundaries !== (profile.boundaries || '') ||
       area !== profile.area ||
+      !!homeCity ||
       avatarSeed !== profile.avatarSeed ||
       avatar.uri !== profile.avatarUri ||
       interests.join() !== profile.interests.join() ||
       languages.join() !== (profile.languages || []).join(),
-    [name, bio, pronouns, boundaries, area, avatarSeed, avatar.uri, interests, languages, profile]
+    [name, bio, pronouns, boundaries, area, homeCity, avatarSeed, avatar.uri, interests, languages, profile]
   );
 
   const toggle = (list, setList, v) => setList(list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
@@ -71,6 +74,7 @@ export default function ProfileEditScreen() {
       pronouns: pronouns.trim(),
       boundaries: boundaries.trim(),
       area,
+      ...(homeCity ? { city: homeCity.name } : null),
       interests,
       languages,
       avatarSeed,
@@ -80,6 +84,7 @@ export default function ProfileEditScreen() {
     setSaveError(null);
     try {
       await E.me.update(patch);
+      if (homeCity) applyTaxonomy({ city: homeCity });
       setProfile({ ...patch, avatarUri: avatar.uri });
       haptics.success();
       nav.goBack();
@@ -233,11 +238,14 @@ export default function ProfileEditScreen() {
         <AppText variant="caption" color={colors.muted} style={{ marginBottom: space.sm }}>
           Others only see this neighbourhood, never your exact spot.
         </AppText>
-        <ChipGrid columns={2}>
-          {CITY.areas.map((a) => (
-            <Chip key={a} label={a} fill selected={area === a} onPress={() => setArea(a)} />
-          ))}
-        </ChipGrid>
+        <CityAreaPicker
+          value={area}
+          cityName={homeCity?.name || profile.city || undefined}
+          onSelect={(a, city) => {
+            setArea(a);
+            setHomeCity(city && city.name && city.name !== (profile.city || CITY.name) ? city : null);
+          }}
+        />
       </Sheet>
 
       {/* Languages */}

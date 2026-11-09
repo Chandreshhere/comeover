@@ -1,11 +1,13 @@
-// Create step 3 — public venue / public area picker.
-// Plans must be in public places; the exact spot is only revealed to accepted people.
+// Create step 3 — public venue / public area picker, plus nearby verified
+// partner venues (sets draft.venueId). Plans must be in public places; the
+// exact spot is only revealed to accepted people.
 import React, { useEffect } from 'react';
 import { useNavigation } from '@react-navigation/native';
 import { Chip, ChipGrid, TextField } from '@/components';
 import { CITY } from '@/data/catalog';
 import { useAppStore } from '@/store/useAppStore';
 import StepScaffold, { FieldLabel } from './components/StepScaffold';
+import PartnerVenuePicker from './components/PartnerVenuePicker';
 import { VENUE_TYPES, looksPrivate } from './createUtils';
 
 export default function CreatePlaceScreen() {
@@ -22,6 +24,15 @@ export default function CreatePlaceScreen() {
   }, [homeArea]);
 
   const privateError = looksPrivate(draft.venueName) ? 'Plans can’t be at homes or private addresses. Pick a public place.' : null;
+
+  // Partner venue picked → its id, name and area; tapping it again clears it.
+  const pickPartner = (v) => {
+    if (!v) {
+      updateDraft({ venueId: null, venueName: draft.venueName === draft.partnerName ? '' : draft.venueName, partnerName: null });
+      return;
+    }
+    updateDraft({ venueId: v.id, venueName: v.name, partnerName: v.name, venueType: 'Partner venue', area: v.area || draft.area, tableHold: true });
+  };
   const canNext = !!draft.area && !!draft.venueType && !privateError;
 
   return (
@@ -48,14 +59,24 @@ export default function CreatePlaceScreen() {
       <FieldLabel>Type of place</FieldLabel>
       <ChipGrid columns={2}>
         {VENUE_TYPES.map((v) => (
-          <Chip key={v.value} label={v.value} pictogram={v.pictogram} accessibilityLabel={`${v.value}. ${v.hint}`} fill selected={draft.venueType === v.value} onPress={() => updateDraft({ venueType: v.value })} />
+          <Chip
+            key={v.value}
+            label={v.value}
+            pictogram={v.pictogram}
+            accessibilityLabel={`${v.value}. ${v.hint}`}
+            fill
+            selected={draft.venueType === v.value}
+            onPress={() => updateDraft({ venueType: v.value, ...(draft.venueId && v.value !== 'Partner venue' ? { venueId: null } : null) })}
+          />
         ))}
       </ChipGrid>
+
+      <PartnerVenuePicker selectedId={draft.venueId} selectedName={draft.venueName} onPick={pickPartner} />
 
       <FieldLabel right="Optional">Venue name</FieldLabel>
       <TextField
         value={draft.venueName}
-        onChangeText={(t) => updateDraft({ venueName: t })}
+        onChangeText={(t) => updateDraft({ venueName: t, ...(draft.venueId ? { venueId: null } : null) })}
         placeholder={draft.area ? `e.g. Café near ${draft.area} main gate` : 'e.g. Café near the main gate'}
         icon="map-pin"
         maxLength={60}

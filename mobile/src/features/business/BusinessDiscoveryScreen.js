@@ -1,4 +1,4 @@
-// business_discovery — partner places (GET /venues) and clearly labelled sponsored plans.
+// business_discovery — partner places (GET /venues, optional hasOffer=true) and clearly labelled sponsored plans.
 import React, { useMemo, useState } from 'react';
 import { RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -19,10 +19,12 @@ export default function BusinessDiscoveryScreen() {
   const blocked = useAppStore((s) => s.blocked);
   const area = useAppStore((s) => s.profile.area);
   const [category, setCategory] = useState(null);
+  const [withPerks, setWithPerks] = useState(false);
   const [why, setWhy] = useState(null);
 
-  const venuesQ = useRemote(() => fetchVenues(category), [category]);
-  const venues = venuesQ.data || [];
+  const venuesQ = useRemote(() => fetchVenues(category, { hasOffer: withPerks }), [category, withPerks]);
+  // Filter on the client too, so an API without hasOffer support still shows only venues with perks.
+  const venues = useMemo(() => (venuesQ.data || []).filter((v) => !withPerks || v.hasOffer), [venuesQ.data, withPerks]);
 
   const visibleActivities = useMemo(() => activities.filter((a) => !blocked.includes(a.host?.id)), [activities, blocked]);
   const sponsoredPlans = useMemo(() => {
@@ -52,9 +54,23 @@ export default function BusinessDiscoveryScreen() {
       }
       refreshControl={<RefreshControl refreshing={venuesQ.refreshing} onRefresh={venuesQ.reload} tintColor={colors.ink} />}
     >
-      <View style={{ marginHorizontal: -layout.screenPadding, marginTop: space.xs }}>
+      {/* Your perks: what your level has unlocked */}
+      <ListGroup style={{ marginTop: space.xs }}>
+        <ListRow icon="ticket" iconBg={colors.orangeSoft} title="Your perks" subtitle="Unlock as you level up. XP is never spent." onPress={() => nav.navigate('my_perks')} last />
+      </ListGroup>
+
+      <View style={{ marginHorizontal: -layout.screenPadding, marginTop: space.md }}>
         <ChipRow>
-          <Chip label="All" icon="grid" selected={!category} onPress={() => setCategory(null)} />
+          <Chip
+            label="All"
+            icon="grid"
+            selected={!category && !withPerks}
+            onPress={() => {
+              setCategory(null);
+              setWithPerks(false);
+            }}
+          />
+          <Chip label="With perks" icon="ticket" selected={withPerks} onPress={() => setWithPerks((x) => !x)} />
           {categories.map((c) => (
             <Chip key={c.slug} label={c.short} pictogram={c.pictogram} selected={category === c.slug} onPress={() => setCategory(c.slug)} />
           ))}
@@ -84,7 +100,17 @@ export default function BusinessDiscoveryScreen() {
         skeletonRows={3}
         skeletonHeight={96}
         empty={
-          category
+          withPerks
+            ? {
+                title: 'No perks here yet',
+                body: 'Partner places add perks often. Check back soon.',
+                cta: 'Show all places',
+                onCta: () => {
+                  setWithPerks(false);
+                  setCategory(null);
+                },
+              }
+            : category
             ? { title: 'No partners here yet', body: 'Try another category.', cta: 'Show all', onCta: () => setCategory(null) }
             : { title: 'No partners here yet', body: 'Know a great spot? Tell the owner about us.' }
         }

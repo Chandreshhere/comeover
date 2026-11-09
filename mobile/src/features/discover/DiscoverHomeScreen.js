@@ -1,6 +1,7 @@
 // SCREEN B — Discover / Home (reference: middle phone).
 // Greeting + avatar, bell, search, periwinkle featured live plan, pill
-// category filters, pastel plan tiles, then nearby people, groups and trending.
+// category filters, pastel plan tiles, then nearby people, groups and a
+// compact "Perks near you" rail (hidden when there are none).
 // Data: GET /activities (+ /activities/featured), /availability/nearby,
 // /circles and /quests — loaded on focus, refreshed with pull-to-refresh.
 import React, { useEffect, useMemo, useState } from 'react';
@@ -47,6 +48,7 @@ import { STYLE_META, matchLabel } from '@/utils/socialMatch';
 import FeaturedPlanCard from './components/FeaturedPlanCard';
 import HomeSectionHeader, { homeTone } from './components/HomeSectionHeader';
 import PersonChip from './components/PersonChip';
+import PerksRail from '@/features/business/components/PerksRail';
 import { isFull, joinUiState, visibleActivities } from './utils';
 
 // Status dot that gently pulses while you're available.
@@ -104,6 +106,7 @@ export default function DiscoverHomeScreen() {
   const [person, setPerson] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [joiningCircle, setJoiningCircle] = useState(null);
+  const [perksKey, setPerksKey] = useState(0);
 
   const lvl = levelFor(xp);
   const byId = useMemo(() => new Map(activities.map((a) => [a.id, a])), [activities]);
@@ -160,6 +163,7 @@ export default function DiscoverHomeScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
+    setPerksKey((k) => k + 1);
     const s = useAppStore.getState();
     await Promise.all(
       [s.loadFeed({ silent: true }), s.loadMyActivities('hosted'), s.loadNearbyPeople(), s.loadCircles()].map((p) =>
@@ -522,6 +526,9 @@ export default function DiscoverHomeScreen() {
           />
         </Card>
       )}
+
+      {/* Partner perks: one compact rail, hidden when empty or unavailable */}
+      <PerksRail refreshKey={perksKey} />
 
       {/* Guide entry */}
       <Card

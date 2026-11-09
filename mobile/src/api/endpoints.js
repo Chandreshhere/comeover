@@ -4,6 +4,11 @@ import api from './client';
 
 const enc = encodeURIComponent;
 
+// Cities and their areas (city/area picker, nearest-city match).
+export const cities = {
+  list: () => api.get('/cities'),
+};
+
 export const me = {
   bootstrap: () => api.get('/me/bootstrap'),
   get: () => api.get('/me'),
@@ -131,6 +136,30 @@ export const business = {
   createCampaign: (body) => api.post('/business/campaigns', body),
   analytics: (params) => api.get('/business/analytics', params),
   createPaymentOrder: (body) => api.post('/business/payments/order', body),
+  // Partner perks (staff of the venue's business).
+  offers: () => api.get('/business/offers'),
+  createOffer: (body) => api.post('/business/offers', body),
+  updateOffer: (id, patch) => api.patch(`/business/offers/${enc(id)}`, patch),
+  confirmRedemption: (body) => api.post('/business/redemptions/confirm', body),
+  redemptions: () => api.get('/business/redemptions'),
+  tableHolds: (params) => api.get('/business/table-holds', params),
+  respondTableHold: (id, body) => api.post(`/business/table-holds/${enc(id)}/respond`, body),
+};
+
+// Partner perks for app users: unlocked by level, never paid for with XP.
+export const perks = {
+  mine: (params) => api.get('/me/perks', params),
+  redeem: (offerId, body) => api.post(`/offers/${enc(offerId)}/redeem`, body),
+  redemption: (id) => api.get(`/redemptions/${enc(id)}`),
+  cancelRedemption: (id) => api.post(`/redemptions/${enc(id)}/cancel`),
+  myRedemptions: () => api.get('/me/redemptions'),
+};
+
+// Host asks a partner venue to hold a table for a plan (no money involved).
+export const tableHolds = {
+  get: (activityId) => api.get(`/activities/${enc(activityId)}/table-hold`),
+  request: (activityId, body) => api.post(`/activities/${enc(activityId)}/table-hold`, body, { idempotencyKey: `hold:${activityId}` }),
+  cancel: (activityId) => api.del(`/activities/${enc(activityId)}/table-hold`),
 };
 
 export const assistant = {

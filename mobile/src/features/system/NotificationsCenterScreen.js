@@ -20,6 +20,8 @@ const TYPE = {
   nearby: { icon: 'map-pin', tone: 'orange', label: 'Nearby' },
   quest: { icon: 'trophy', tone: 'pink', label: 'Quest' },
   safety: { icon: 'shield', tone: 'mint', label: 'Safety' },
+  marketing: { icon: 'sparkle', tone: 'orange', label: 'News' },
+  system: { icon: 'storefront', tone: 'lavender', label: 'Partner' },
 };
 
 const TAB_SCREENS = ['discover_home', 'live_radar', 'circles_home', 'profile_home'];

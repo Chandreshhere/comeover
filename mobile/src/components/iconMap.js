@@ -155,6 +155,9 @@ const C = {
   Sun: () => require('phosphor-react-native/src/icons/Sun').Sun,
   SunHorizon: () => require('phosphor-react-native/src/icons/SunHorizon').SunHorizon,
   Tag: () => require('phosphor-react-native/src/icons/Tag').Tag,
+  Ticket: () => require('phosphor-react-native/src/icons/Ticket').Ticket,
+  QrCode: () => require('phosphor-react-native/src/icons/QrCode').QrCode,
+  Storefront: () => require('phosphor-react-native/src/icons/Storefront').Storefront,
   Target: () => require('phosphor-react-native/src/icons/Target').Target,
   TeaBag: () => require('phosphor-react-native/src/icons/TeaBag').TeaBag,
   ThumbsDown: () => require('phosphor-react-native/src/icons/ThumbsDown').ThumbsDown,
@@ -347,6 +350,9 @@ export const ICON_NAMES = {
   'paw': 'PawPrint',
   'guitar': 'Guitar',
   'puzzle': 'PuzzlePiece',
+  'ticket': 'Ticket',
+  'qr-code': 'QrCode',
+  'storefront': 'Storefront',
 };
 
 // Activity pictograms (server taxonomy keys).

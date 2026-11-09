@@ -1,14 +1,14 @@
 // social_roadmap — "Your journey". The one place for level + XP to next,
 // then what to do next (quests), the milestone path and what you've explored.
 import React, { useMemo, useState } from 'react';
-import { RefreshControl, View } from 'react-native';
+import { Pressable, RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
 import { AppText, Chip, ChipGrid, HeroCard, Icon, IconButton, ProgressBar, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
 import { categories } from '@/data/catalog';
 import { levelFor, useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
-import { colors, glass, space } from '@/theme/tokens';
+import { colors, glass, layout, radius, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
 import AnimatedQuestCard from './components/AnimatedQuestCard';
 import RoadmapPath from './components/RoadmapPath';
@@ -17,7 +17,7 @@ import { ActionError, BurstHeader } from './components/progressShared';
 const EXPLORED_PREVIEW = 6;
 
 // Level, XP to the next level and the streak: the only level summary in Progress.
-function LevelSummary({ progress, error, onRetry }) {
+function LevelSummary({ progress, error, onRetry, onPerks }) {
   const xp = progress.xp ?? 0;
   const lvl = levelFor(xp);
   const weeks = progress.streakWeeks ?? 0;
@@ -46,6 +46,23 @@ function LevelSummary({ progress, error, onRetry }) {
           </AppText>
         </View>
       </View>
+      {onPerks ? (
+        <Pressable
+          onPress={onPerks}
+          accessibilityRole="button"
+          accessibilityLabel="See your perks. Your XP is never spent."
+          style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', minHeight: layout.minTouch, marginTop: space.sm, paddingHorizontal: space.sm, borderRadius: radius.pill, backgroundColor: glass(0.6), opacity: pressed ? 0.7 : 1 })}
+        >
+          <Icon name="ticket" size={16} color={colors.ink} />
+          <AppText variant="label" style={{ flex: 1, marginLeft: space.xs }} numberOfLines={1}>
+            See your perks
+          </AppText>
+          <AppText variant="caption" color={colors.inkSoft} style={{ marginRight: space.xxs }} numberOfLines={1}>
+            XP is never spent
+          </AppText>
+          <Icon name="chevron-right" size={14} color={colors.inkSoft} />
+        </Pressable>
+      ) : null}
       {error ? <ActionError message={error} onRetry={onRetry} style={{ backgroundColor: glass(0.7) }} /> : null}
     </HeroCard>
   );
@@ -91,7 +108,12 @@ export default function SocialRoadmapScreen() {
       }
     >
       <Animated.View entering={enter(0)} style={{ marginTop: space.xs }}>
-        <LevelSummary progress={progress} error={progressL.status === 'error' ? progressL.error || 'Couldn’t refresh your progress.' : null} onRetry={progressL.reload} />
+        <LevelSummary
+          progress={progress}
+          error={progressL.status === 'error' ? progressL.error || 'Couldn’t refresh your progress.' : null}
+          onRetry={progressL.reload}
+          onPerks={() => nav.navigate('my_perks')}
+        />
       </Animated.View>
 
       {/* Quests */}

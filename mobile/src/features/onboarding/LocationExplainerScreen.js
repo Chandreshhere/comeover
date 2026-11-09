@@ -13,7 +13,6 @@ import CoarseMapArt from './components/CoarseMapArt';
 export default function LocationExplainerScreen() {
   const nav = useNavigation();
   const area = useAppStore((s) => s.profile.area);
-  const setProfile = useAppStore((s) => s.setProfile);
   const setPrefs = useAppStore((s) => s.setPrefs);
   const [picker, setPicker] = useState(false);
 
@@ -38,8 +37,8 @@ export default function LocationExplainerScreen() {
         visible={picker}
         value={area}
         onClose={() => setPicker(false)}
-        onSelect={(a) => {
-          setProfile({ area: a });
+        onSelect={(a, city) => {
+          useAppStore.getState().setHomeArea(a, city);
           setPrefs({ location: 'manual', coords: null });
           setPicker(false);
           nav.navigate('notification_opt_in');

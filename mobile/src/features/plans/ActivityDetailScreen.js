@@ -40,6 +40,7 @@ import usePlan, { openGroupChat } from './usePlan';
 import { handleJoinError } from './joinActions';
 import PlanGate from './components/PlanGate';
 import Disclosure, { FactLine } from './components/Disclosure';
+import TableHoldStatus from './components/TableHoldStatus';
 
 const pct = (r) => (r == null ? null : `${Math.round(r * 100)}%`);
 
@@ -385,6 +386,8 @@ export default function ActivityDetailScreen() {
           <InfoRow icon="map-pin" title={venueTitle} subtitle={venueSub} />
           <InfoRow glyph={Coins} title={freeCost ? 'Free' : a.cost} subtitle={freeCost ? null : 'Settle up after with SplitMate'} last />
         </Card>
+        {/* Partner venue table hold: host and accepted members only */}
+        {reveal && !cancelled && !ended && !!a.venueId && <TableHoldStatus activityId={a.id} isHost={isHost} />}
       </Animated.View>
 
       {/* Host tools */}

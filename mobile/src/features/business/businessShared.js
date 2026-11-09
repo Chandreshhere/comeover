@@ -3,14 +3,16 @@
 //   GET  /business/campaigns · POST /business/campaigns
 //   GET  /business/analytics?venueId&range · POST /business/payments/order
 // Shapes are normalised defensively so screens tolerate partial payloads.
-import { business } from '@/api/endpoints';
+import { business, perks as perksApi } from '@/api/endpoints';
 import { categoryBySlug } from '@/data/catalog';
 import { itemsOf } from '@/features/premium/useRemote';
+import { isPerkOffer, normaliseOffer } from './perks';
 
-// The API returns `offers` as an array of strings or { title|text, terms } objects.
-// The screens show the first one as `offer` (+ optional `offerTerms`).
+// Legacy venues carry `offers` as strings or { title|text, terms } objects; the
+// screens show the first one as `offer` (+ optional `offerTerms`). Partner perks
+// (VenueOffer objects with id + label) are kept separately as `perks`.
 function firstOffer(v) {
-  const list = Array.isArray(v.offers) ? v.offers : [];
+  const list = (Array.isArray(v.offers) ? v.offers : []).filter((o) => !isPerkOffer(o));
   const o = list[0];
   if (!o) return { offer: v.offer || '', offerTerms: v.offerTerms || '' };
   if (typeof o === 'string') return { offer: o, offerTerms: v.offerTerms || '' };
@@ -20,9 +22,13 @@ function firstOffer(v) {
 export function normaliseVenue(v) {
   if (!v) return null;
   const categories = Array.isArray(v.categories) ? v.categories : v.category ? [v.category] : [];
+  const perks = (Array.isArray(v.offers) ? v.offers : []).map(normaliseOffer).filter(Boolean);
   return {
     ...v,
     ...firstOffer(v),
+    perks,
+    hasOffer: v.hasOffer ?? perks.length > 0,
+    bestOfferLabel: v.bestOfferLabel || perks[0]?.label || null,
     categories,
     pictogram: v.pictogram || categoryBySlug[categories[0]]?.pictogram || 'pin',
     accentIndex: v.accentIndex ?? 0,
@@ -33,9 +39,39 @@ export function normaliseVenue(v) {
   };
 }
 
-export async function fetchVenues(category) {
-  const res = await business.venues(category ? { category } : undefined);
+// `near`: { lat, lng } or { area } so the API sorts by distance.
+export async function fetchVenues(category, { hasOffer, near, limit } = {}) {
+  const res = await business.venues({ category: category || undefined, hasOffer: hasOffer ? 'true' : undefined, limit, ...(near || {}) });
   return itemsOf(res).map(normaliseVenue);
+}
+
+// Reference point for "nearby" lists: rounded device coords, else the home area.
+export function nearParams(coords, area) {
+  if (coords?.latitude != null && coords?.longitude != null) return { lat: coords.latitude, lng: coords.longitude };
+  return area ? { area } : {};
+}
+
+// Venues that currently run a perk (GET /venues?hasOffer=true), best first.
+export async function fetchPerkVenues(near, max = 6) {
+  const list = await fetchVenues(null, { hasOffer: true, near, limit: 20 });
+  return list.filter((v) => v.hasOffer && v.bestOfferLabel).slice(0, max);
+}
+
+// GET /me/perks → level, show-up, unlocked / locked perks and the next unlock.
+export async function fetchMyPerks(coords) {
+  const r = (await perksApi.mine(coords?.latitude != null ? { lat: coords.latitude, lng: coords.longitude } : undefined)) || {};
+  const items = (list) =>
+    (Array.isArray(list) ? list : [])
+      .map((p) => ({ offer: normaliseOffer(p?.offer), venue: p?.venue ? normaliseVenue(p.venue) : null }))
+      .filter((p) => p.offer && p.venue);
+  return {
+    level: r.level || null,
+    showUpRate: typeof r.showUpRate === 'number' ? r.showUpRate : null,
+    plansConsidered: r.plansConsidered ?? 0,
+    unlocked: items(r.unlocked),
+    locked: items(r.locked),
+    nextUnlock: r.nextUnlock || null,
+  };
 }
 
 export async function fetchVenue(id) {

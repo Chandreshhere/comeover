@@ -61,6 +61,7 @@ export default function CreateTypeScreen() {
   const prefillVenue = route.params?.venueName;
   const prefillArea = route.params?.area;
   const prefillTitle = route.params?.title;
+  const prefillVenueId = route.params?.venueId;
   useEffect(() => {
     if (prefill && categoryBySlug[prefill] && draft.category !== prefill) {
       updateDraft({ category: prefill, custom: false, title: draft.title && !draft.autoTitle ? draft.title : defaultTitle(prefill), autoTitle: !(draft.title && !draft.autoTitle) });
@@ -70,6 +71,10 @@ export default function CreateTypeScreen() {
     if (prefillVenue) {
       extra.venueName = prefillVenue;
       extra.venueType = 'Partner venue';
+      // "Host a plan here" on a partner venue preselects it (server checks it's verified).
+      extra.venueId = prefillVenueId || null;
+      extra.partnerName = prefillVenueId ? prefillVenue : null;
+      extra.tableHold = true;
     }
     if (prefillArea) extra.area = prefillArea;
     if (prefillTitle) {
@@ -78,7 +83,7 @@ export default function CreateTypeScreen() {
     }
     if (Object.keys(extra).length) updateDraft(extra);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefill, prefillVenue, prefillArea, prefillTitle]);
+  }, [prefill, prefillVenue, prefillVenueId, prefillArea, prefillTitle]);
 
   const pick = (slug, custom = false) => {
     haptics.select();

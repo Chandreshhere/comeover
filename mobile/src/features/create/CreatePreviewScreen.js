@@ -1,9 +1,11 @@
-// Create step 6 — one summary card (tap a line to edit), three safety checks, publish.
+// Create step 6 — one summary card (tap a line to edit), an optional table hold
+// at a partner venue, three safety checks, publish.
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import Animated, { ReduceMotion, ZoomIn } from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Icon, ListRow, usePressScale } from '@/components';
+import { AppText, Icon, ListGroup, ListRow, usePressScale } from '@/components';
+import { tableHolds } from '@/api/endpoints';
 import { IconBubble } from '@/components/Card';
 import { categoryBySlug } from '@/data/catalog';
 import { useAppStore } from '@/store/useAppStore';
@@ -129,8 +131,13 @@ export default function CreatePreviewScreen() {
         return;
       }
       if (!draft.clientKey) updateDraft({ clientKey: newClientKey() });
+      // Read before publishing: publishDraft resets the draft.
+      const wantsHold = !!draft.venueId && draft.tableHold !== false;
       const activity = await publishDraft();
       haptics.success();
+      // Ask the partner venue to hold a table. Fire and forget: a missing
+      // endpoint (404) or any other error never blocks the plan.
+      if (wantsHold && activity?.id) tableHolds.request(activity.id, {}).catch(() => null);
       nav.reset({ index: 1, routes: [{ name: 'main' }, { name: 'activity_detail', params: { id: activity.id, justPublished: true } }] });
     } catch (e) {
       // The draft stays in the store on failure; nothing is lost.
@@ -222,6 +229,23 @@ export default function CreatePreviewScreen() {
           last
         />
       </View>
+
+      {/* Partner venue: optional table hold (no payment involved) */}
+      {!!draft.venueId && (
+        <>
+          <FieldLabel>Partner venue</FieldLabel>
+          <ListGroup>
+            <ListRow
+              icon="calendar-check"
+              title="Ask the venue to hold a table"
+              subtitle={`We send ${draft.venueName || 'the venue'} your time and group size. No payment needed.`}
+              toggle={draft.tableHold !== false}
+              onToggle={(v) => updateDraft({ tableHold: v })}
+              last
+            />
+          </ListGroup>
+        </>
+      )}
 
       {/* Safety confirmations */}
       <FieldLabel>Before you publish</FieldLabel>

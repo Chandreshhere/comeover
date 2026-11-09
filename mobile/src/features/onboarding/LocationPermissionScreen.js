@@ -33,7 +33,6 @@ const COPY = {
 export default function LocationPermissionScreen() {
   const nav = useNavigation();
   const area = useAppStore((s) => s.profile.area);
-  const setProfile = useAppStore((s) => s.setProfile);
   const setPrefs = useAppStore((s) => s.setPrefs);
 
   const [state, setState] = useState('checking');
@@ -175,8 +174,8 @@ export default function LocationPermissionScreen() {
         visible={picker}
         value={area}
         onClose={() => setPicker(false)}
-        onSelect={(a) => {
-          setProfile({ area: a });
+        onSelect={(a, city) => {
+          useAppStore.getState().setHomeArea(a, city);
           if (state !== 'granted') setPrefs({ location: 'manual', coords: null });
           setPicker(false);
           if (state !== 'granted') nav.navigate('notification_opt_in');
