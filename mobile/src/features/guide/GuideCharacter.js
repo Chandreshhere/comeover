@@ -148,6 +148,7 @@ export default function GuideCharacter({
   still = false,
   leaf,
   outline = false,
+  running = false, // dashing: feet cycle and arms pump
   style,
   accessibilityLabel = `${GUIDE_NAME}, the Come Over guide`,
   decorative = false,
@@ -174,6 +175,8 @@ export default function GuideCharacter({
   const talkMix = useSharedValue(talkingNow || state === 'happy' ? 1 : 0);
   const sadMix = useSharedValue(state === 'sad' ? 1 : 0);
   const talkPhase = useSharedValue(0); // 0→1 loop while talking: head bob + tilt rhythm
+  const runPhase = useSharedValue(0); // 0→1 loop per stride while running
+  const runMix = useSharedValue(0); // 0..1 blend into the run cycle
   const gesture = useSharedValue(0); // explaining-hand gesture while talking
   const tear = useSharedValue(0);
   const mouth = useSharedValue(state === 'happy' ? 0.8 : talkingNow ? 0.6 : 0.3);
@@ -280,6 +283,19 @@ export default function GuideCharacter({
     }
     if (animate && state === 'happy' && autoHop && hopKey == null) hop(2);
   }, [state, animate]);
+
+  // Running: a quick stride cycle (feet lift in turn, arms pump), blended in/out.
+  useEffect(() => {
+    cancelAnimation(runPhase);
+    cancelAnimation(runMix);
+    if (running && animate) {
+      runPhase.value = 0;
+      runPhase.value = withRepeat(withTiming(1, { duration: 240, easing: Easing.linear }), -1);
+      runMix.value = withTiming(1, { duration: 90 });
+    } else {
+      runMix.value = withTiming(0, { duration: 160 });
+    }
+  }, [running, animate]);
 
   // Talking body language: head bobs and tilts with the words, eyebrows lift,
   // and the free hand gestures now and then, so Mo talks like a character.
@@ -396,8 +412,21 @@ export default function GuideCharacter({
       ],
     };
   });
-  const armLStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${armL.value + breathe.value * 4}deg` }] }));
-  const armRStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${armR.value - breathe.value * 4 - gesture.value * 42}deg` }] }));
+  const pump = () => {
+    'worklet';
+    return Math.sin(runPhase.value * Math.PI * 2) * 38 * runMix.value;
+  };
+  const armLStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${armL.value + breathe.value * 4 + pump()}deg` }] }));
+  const armRStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${armR.value - breathe.value * 4 - gesture.value * 42 + pump()}deg` }] }));
+  // Feet lift in turn while running.
+  const footStyle = (phase) =>
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useAnimatedStyle(() => {
+      const a = Math.sin((runPhase.value + phase) * Math.PI * 2);
+      return { transform: [{ translateY: -Math.max(0, a) * 9 * k * runMix.value }, { translateX: a * 3 * k * runMix.value }] };
+    });
+  const footLStyle = footStyle(0);
+  const footRStyle = footStyle(0.5);
   const sproutStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${sprout.value}deg` }] }));
   const faceStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: lookX.value * 0.45 * k }, { translateY: lookY.value * 0.35 * k }],
@@ -487,12 +516,12 @@ export default function GuideCharacter({
           {arm(148, 116, 169, 143, 1)}
         </Animated.View>
 
-        {/* feet + body (absolute like every other layer, so nothing stacks in flow) */}
+        {/* feet (each on its own layer so they can run) + body */}
+        <Animated.View style={[fill, footLStyle]}>{svg(<Ellipse cx={76} cy={179} rx={15} ry={8.5} fill={c.foot} />)}</Animated.View>
+        <Animated.View style={[fill, footRStyle]}>{svg(<Ellipse cx={124} cy={179} rx={15} ry={8.5} fill={c.foot} />)}</Animated.View>
         <View style={fill}>
           {svg(
             <>
-              <Ellipse cx={76} cy={179} rx={15} ry={8.5} fill={c.foot} />
-              <Ellipse cx={124} cy={179} rx={15} ry={8.5} fill={c.foot} />
               <Path d={BODY} fill={c.body} stroke={c.line} strokeWidth={3.5} strokeLinejoin="round" />
               {/* cheeks */}
               <Ellipse cx={63} cy={121} rx={9} ry={5.5} fill={c.cheek} />

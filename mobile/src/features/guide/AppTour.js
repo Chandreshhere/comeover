@@ -214,12 +214,23 @@ export default function AppTour() {
   const panelTop = useSharedValue(0);
   // Mo swaps sides at every stop and dashes across: dashX goes from the old
   // side's offset to 0 (his new spot), with lean, stretch and speed lines.
-  const [rowW, setRowW] = useState(0);
+  // Mo lives on his own layer (screen coordinates) so he can dash anywhere:
+  // he travels to the next stop FIRST, then the panel (bubble + buttons) pops in.
   const [dashing, setDashing] = useState(false);
-  const moX = useSharedValue(0); // Mo's x in the panel: 0 = left spot, span = right spot
-  const moTarget = useSharedValue(0);
+  const [arrived, setArrived] = useState(false);
+  const moPX = useSharedValue(0);
+  const moPY = useSharedValue(0);
+  const fromX = useSharedValue(0);
+  const fromY = useSharedValue(0);
+  const toX = useSharedValue(0);
+  const toY = useSharedValue(0);
   const crouch = useSharedValue(0); // anticipation squash before launching
   const dust = useSharedValue(0); // launch puffs 0→1
+  const panelIn = useSharedValue(0); // panel (bubble, dots, buttons) visibility
+  const placedOnce = useRef(false);
+  const lastDashStep = useRef(-1);
+  const showTimer = useRef(null);
+  useEffect(() => () => clearTimeout(showTimer.current), []);
   const moSide = step % 2 === 0 ? 'left' : 'right';
 
   // Replay contract: tourDone flipping back to false restarts from step 0.
@@ -348,7 +359,57 @@ export default function AppTour() {
     else if (above) top = rect.y - (TOUR_STEPS[step]?.pad ?? 8) - GAP - panelH;
     else top = rect.y + rect.height + (TOUR_STEPS[step]?.pad ?? 8) + GAP;
     top = Math.max(minTop, Math.min(maxTop, top));
-    panelTop.value = reduce || panelTop.value === 0 ? top : withTiming(top, { duration: 220, easing: Easing.out(Easing.cubic) });
+    // Mo's spot: top corner of the panel on his side (the bubble sits beside him).
+    const tx = layout.screenPadding + (moSide === 'left' ? 0 : size.w - layout.screenPadding * 2 - CHAR);
+    const ty = top;
+    const show = () => {
+      setDashing(false);
+      setArrived(true);
+      panelIn.value = withTiming(1, { duration: 180, easing: Easing.out(Easing.cubic) });
+    };
+    if (!placedOnce.current || reduce) {
+      clearTimeout(showTimer.current);
+      placedOnce.current = true;
+      lastDashStep.current = step;
+      panelTop.value = top;
+      moPX.value = tx;
+      moPY.value = ty;
+      fromX.value = tx;
+      fromY.value = ty;
+      toX.value = tx;
+      toY.value = ty;
+      show();
+      return;
+    }
+    panelTop.value = top; // panel is hidden while Mo travels; it reappears in place
+    if (lastDashStep.current === step) {
+      // Same stop, panel size changed (the new text was measured): re-aim Mo.
+      // Never cancels the reveal: the panel is shown by the timer below.
+      toX.value = tx;
+      toY.value = ty;
+      moPX.value = withTiming(tx, { duration: 200, easing: Easing.out(Easing.cubic) });
+      moPY.value = withTiming(ty, { duration: 200, easing: Easing.out(Easing.cubic) });
+      return;
+    }
+    lastDashStep.current = step;
+    setArrived(false);
+    setDashing(true);
+    cancelAnimation(panelIn);
+    panelIn.value = withTiming(0, { duration: 90 });
+    fromX.value = moPX.value;
+    fromY.value = moPY.value;
+    toX.value = tx;
+    toY.value = ty;
+    crouch.value = withSequence(withTiming(1, { duration: 110, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 160 }));
+    dust.value = 0;
+    dust.value = withDelay(100, withTiming(1, { duration: 520, easing: Easing.out(Easing.quad) }));
+    const dash = { duration: 620, easing: Easing.bezier(0.32, 0, 0.2, 1.08) }; // slight skid past, then settle
+    moPX.value = withDelay(110, withTiming(tx, dash));
+    moPY.value = withDelay(110, withTiming(ty, dash));
+    // Reveal the bubble when he lands. A timer (not the animation callback) so a
+    // re-aim mid-dash can never leave the bubble hidden.
+    clearTimeout(showTimer.current);
+    showTimer.current = setTimeout(show, 110 + dash.duration + 20);
   }, [measured, panelH, rect, above, size.h, step]);
 
   const finish = useCallback(() => {
@@ -358,26 +419,12 @@ export default function AppTour() {
     setRunning(false);
     setMeasured(false);
     panelTop.value = 0;
+    panelIn.value = 0;
+    placedOnce.current = false; // a replay starts with Mo placed, not dashing
+    lastDashStep.current = -1;
     setPrefs({ tourDone: true });
   }, [setPrefs]);
 
-  useEffect(() => {
-    if (!span) return undefined;
-    const target = moSide === 'left' ? 0 : span;
-    moTarget.value = target;
-    if (step === 0 || reduce) {
-      moX.value = target;
-      return undefined;
-    }
-    setDashing(true);
-    cancelAnimation(moX);
-    crouch.value = withSequence(withTiming(1, { duration: 110, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 160 }));
-    dust.value = 0;
-    dust.value = withDelay(100, withTiming(1, { duration: 520, easing: Easing.out(Easing.quad) }));
-    moX.value = withDelay(110, withTiming(target, { duration: 560, easing: Easing.bezier(0.3, 0.0, 0.2, 1.12) })); // slight skid past, then settle
-    const t = setTimeout(() => setDashing(false), 700);
-    return () => clearTimeout(t);
-  }, [step, span]);
 
   // "Let's go": Mo pops into the middle of the screen, then dashes up and away.
   const [exiting, setExiting] = useState(false);
@@ -403,6 +450,16 @@ export default function AppTour() {
     }, 700);
   }, [finish, size.h]);
   const EXIT = Math.round(CHAR * 1.5);
+  const EXIT_LINE_H = 240;
+  const exitLine = (xFrac, frac) =>
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useAnimatedStyle(() => {
+      const len = Math.max(0.5, Math.min(EXIT_LINE_H, Math.max(0, -exitY.value) * 0.6) * frac);
+      return { opacity: exitY.value < -4 ? 1 : 0, transform: [{ translateX: EXIT * xFrac }, { translateY: EXIT * 0.84 - (EXIT_LINE_H - len) / 2 }, { scaleY: len / EXIT_LINE_H }] };
+    });
+  const exitL1 = exitLine(0.36, 1);
+  const exitL2 = exitLine(0.5, 0.8);
+  const exitL3 = exitLine(0.64, 0.62);
   const exitMoStyle = useAnimatedStyle(() => {
     const speed = Math.min(1, -exitY.value / ((size.h || 900) * 0.25));
     return { opacity: exitIn.value, transform: [{ translateY: exitY.value }, { scale: 0.5 + 0.5 * exitIn.value }, { scaleY: 1 + speed * 0.28 }, { scaleX: 1 - speed * 0.14 }] };
@@ -445,46 +502,67 @@ export default function AppTour() {
     height: Math.max(0, sh.value),
     borderRadius: Math.max(0, sr.value),
   }));
-  const panelStyle = useAnimatedStyle(() => ({ transform: [{ translateY: panelTop.value }] }));
-  const span = Math.max(0, rowW - CHAR);
+  const panelStyle = useAnimatedStyle(() => ({ opacity: panelIn.value, transform: [{ translateY: panelTop.value }, { scale: 0.96 + panelIn.value * 0.04 }] }));
+  // One speed curve drives everything: 0 at take-off and landing, 1 mid-dash.
   const runOf = () => {
     'worklet';
-    const dist = span ? Math.abs(moTarget.value - moX.value) / span : 0;
-    return { dist, run: Math.min(1, dist * 3), dir: moTarget.value >= moX.value ? 1 : -1 };
+    const dx = toX.value - fromX.value;
+    const dy = toY.value - fromY.value;
+    const total = Math.hypot(dx, dy);
+    const done = total ? Math.hypot(moPX.value - fromX.value, moPY.value - fromY.value) / total : 1;
+    const speed = total < 2 || done >= 1 ? 0 : Math.sin(Math.PI * Math.max(0, done));
+    return { done, speed, angle: Math.atan2(dy, dx), dirX: dx === 0 ? 0 : dx > 0 ? 1 : -1 };
   };
-  const moDashStyle = useAnimatedStyle(() => {
-    const { dist, run, dir } = runOf();
-    const bounce = -Math.abs(Math.sin(dist * Math.PI * 7)) * 5 * run;
+  const moStyle = useAnimatedStyle(() => {
+    const { done, speed, dirX } = runOf();
+    const bounce = -Math.abs(Math.sin(done * Math.PI * 6)) * 4 * speed;
     const c = crouch.value;
     return {
       transform: [
-        { translateX: moX.value },
-        { translateY: bounce + c * 6 },
-        { rotate: `${dir * run * 13}deg` },
-        { scaleX: (1 + run * 0.14) * (1 + c * 0.12) },
-        { scaleY: (1 - run * 0.09) * (1 - c * 0.14) },
+        { translateX: moPX.value },
+        { translateY: moPY.value + bounce + c * 6 },
+        { rotate: `${(dirX || 1) * speed * 14}deg` },
+        { scaleX: (1 + speed * 0.1) * (1 + c * 0.12) },
+        { scaleY: (1 - speed * 0.07) * (1 - c * 0.14) },
       ],
     };
   });
-  // Afterimages: soft Mo-shaped silhouettes trailing behind while he runs.
-  const ghost = (k) =>
+  // Coloured speed lines streaming from Mo's back, pointing along his run.
+  const LINE_W = 200;
+  const speedLine = (lateral, lenFrac, h) =>
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useAnimatedStyle(() => {
-      const { run, dir } = runOf();
-      return { opacity: run * (0.42 - k * 0.12), transform: [{ translateX: moX.value - dir * (k + 1) * CHAR * 0.3 }, { rotate: `${dir * run * 13}deg` }] };
+      const { speed, angle } = runOf();
+      const len = Math.max(0.5, speed * 170 * lenFrac);
+      const cx = moPX.value + CHAR / 2;
+      const cy = moPY.value + CHAR * 0.55;
+      return {
+        opacity: speed > 0.04 ? 1 : 0,
+        transform: [
+          { translateX: cx - LINE_W / 2 },
+          { translateY: cy - h / 2 },
+          { rotate: `${angle}rad` },
+          { translateX: -(CHAR * 0.34 + len / 2) },
+          { translateY: lateral },
+          { scaleX: len / LINE_W },
+        ],
+      };
     });
-  const ghost1 = ghost(0);
-  const ghost2 = ghost(1);
-  const ghost3 = ghost(2);
-  // Dust puffs at his feet on launch.
+  const line1 = speedLine(-14, 1, 7);
+  const line2 = speedLine(0, 0.8, 6);
+  const line3 = speedLine(14, 0.6, 5);
+  // Dust puffs where he takes off.
   const puff = (k) =>
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useAnimatedStyle(() => {
       const d = dust.value;
-      const side = moTarget.value > 0 ? -1 : 1; // puffs fly opposite to the run
+      const { angle } = runOf();
+      const back = angle + Math.PI;
+      const r = 12 + d * (26 + k * 14);
+      const spread = (k - 1) * 0.5;
       return {
-        opacity: d > 0 && d < 1 ? (1 - d) * 0.8 : 0,
-        transform: [{ translateX: (moTarget.value > 0 ? 0 : span) + CHAR * 0.5 + side * (10 + d * (24 + k * 14)) }, { translateY: CHAR - 10 - d * (8 + k * 6) }, { scale: 0.5 + d * (0.8 + k * 0.2) }],
+        opacity: d > 0 && d < 1 ? (1 - d) * 0.85 : 0,
+        transform: [{ translateX: fromX.value + CHAR / 2 + Math.cos(back + spread) * r - 7 }, { translateY: fromY.value + CHAR - 14 + Math.sin(back + spread) * r * 0.5 - d * 8 }, { scale: 0.5 + d * (0.9 + k * 0.2) }],
       };
     });
   const puff1 = puff(0);
@@ -541,7 +619,10 @@ export default function AppTour() {
       {/* exit: Mo in the centre, then up and away with speed lines below him */}
       {exiting && size.w > 0 && (
         <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: size.w / 2 - EXIT / 2, top: size.h / 2 - EXIT / 2, width: EXIT, height: EXIT }, exitMoStyle]}>
-          <GuideCharacter size={EXIT} state="happy" autoHop={false} decorative />
+          {[exitL1, exitL2, exitL3].map((st, k) => (
+            <Animated.View key={k} style={[{ position: 'absolute', left: 0, top: 0, width: 7 - k, height: EXIT_LINE_H, borderRadius: 4, backgroundColor: ['#F0A34B', '#E6A2F2', '#7FD8A8'][k] }, st]} />
+          ))}
+          <GuideCharacter size={EXIT} state="happy" running autoHop={false} decorative />
         </Animated.View>
       )}
 
@@ -560,28 +641,19 @@ export default function AppTour() {
           ]}
           onLayout={(e) => setPanelH(Math.round(e.nativeEvent.layout.height))}
         >
-          <View style={{ minHeight: CHAR, justifyContent: 'flex-end' }} onLayout={(e) => setRowW(Math.round(e.nativeEvent.layout.width))}>
+          <View style={{ minHeight: CHAR }}>
             <GuideBubble
               key={step}
               title={s.title}
               text={s.text}
-              active={running && measured && !dashing}
+              active={running && measured && arrived}
               tail={moSide}
-              tailAlign="end"
-              tailOffset={Math.max(10, Math.round(CHAR * 0.36 - space.md - 6))}
+              tailAlign="start"
+              tailOffset={Math.round(CHAR * 0.62 - 10)} // arrow at Mo's mouth (62% down him)
               onTalkingChange={setTalking}
-              style={{ marginBottom: space.md, [moSide === 'left' ? 'marginLeft' : 'marginRight']: CHAR + space.xs, opacity: dashing ? 0 : 1 }}
+              style={{ [moSide === 'left' ? 'marginLeft' : 'marginRight']: CHAR + space.xs }}
               maxScale={1.2}
             />
-            {[puff1, puff2, puff3].map((st, k) => (
-              <Animated.View key={`p${k}`} pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: 12, height: 12, borderRadius: 6, backgroundColor: colors.pureWhite }, st]} />
-            ))}
-            {[ghost3, ghost2, ghost1].map((st, k) => (
-              <Animated.View key={`g${k}`} pointerEvents="none" style={[{ position: 'absolute', left: CHAR * 0.18, bottom: CHAR * 0.06, width: CHAR * 0.64, height: CHAR * 0.72, borderRadius: CHAR * 0.34, backgroundColor: colors.pureWhite }, st]} />
-            ))}
-            <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 0, bottom: 0, width: CHAR, height: CHAR }, moDashStyle]}>
-              <GuideCharacter size={CHAR} state={dashing ? 'happy' : charState} talking={talking && !dashing} autoHop={false} decorative />
-            </Animated.View>
           </View>
           <View style={{ alignItems: 'center', marginTop: space.xs }}>
             <Dots count={TOUR_STEPS.length} index={step} />
@@ -603,6 +675,20 @@ export default function AppTour() {
             />
           </View>
         </Animated.View>
+      )}
+      {/* Mo: his own layer, dashing between stops with speed lines + dust */}
+      {measured && !exiting && (
+        <>
+          {[puff1, puff2, puff3].map((st, k) => (
+            <Animated.View key={`p${k}`} pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: 14, height: 14, borderRadius: 7, backgroundColor: '#E5E3FA' }, st]} />
+          ))}
+          {[line1, line2, line3].map((st, k) => (
+            <Animated.View key={`l${k}`} pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: LINE_W, height: 7 - k, borderRadius: 4, backgroundColor: ['#F0A34B', '#E6A2F2', '#7FD8A8'][k] }, st]} />
+          ))}
+          <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: CHAR, height: CHAR }, moStyle]}>
+            <GuideCharacter size={CHAR} state={dashing ? 'happy' : charState} talking={talking && !dashing} running={dashing} autoHop={false} decorative />
+          </Animated.View>
+        </>
       )}
     </Animated.View>
   );
