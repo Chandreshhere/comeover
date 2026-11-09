@@ -82,7 +82,7 @@ function ActivityCard({ a, onDecide }) {
             <div className="label">{a.venueName || 'Venue not set'}</div>
             <div className="caption">
               {a.venueType || 'type unknown'}
-              {a.publicVenue === false ? ' · NOT a public venue — plans must meet in public places' : a.publicVenue ? ' · public venue' : ''}
+              {a.publicVenue === false ? ' · NOT a public venue: plans must meet in public places' : a.publicVenue ? ' · public venue' : ''}
             </div>
           </div>
         </div>

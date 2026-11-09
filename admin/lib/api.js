@@ -86,6 +86,7 @@ const patch = (p, body) => request('PATCH', p, { body: body || {} });
 export const api = {
   // dashboard
   kpis: (range = '7d') => get('/admin/kpis', { range }),
+  insights: (range = '30d') => get('/admin/insights', { range }),
 
   // reports
   reports: ({ status, cursor } = {}) => get('/admin/reports', { status, cursor }),
@@ -96,6 +97,7 @@ export const api = {
 
   // users
   user: (id) => get(`/admin/users/${enc(id)}`),
+  users: ({ q, status = 'all', sort = 'new', cursor } = {}) => get('/admin/users', { q, status, sort, cursor }),
   setUserStatus: (id, { status, reason }) => post(`/admin/users/${enc(id)}/status`, { status, reason }),
 
   // audit
@@ -104,6 +106,17 @@ export const api = {
   // activities
   activities: ({ queue = 'flagged', cursor } = {}) => get('/admin/activities', { queue, cursor }),
   activityDecision: (id, { decision, reason }) => post(`/admin/activities/${enc(id)}/decision`, { decision, reason }),
+
+  // partners (venues, clubs, organisers)
+  businesses: ({ status = 'pending', cursor } = {}) => get('/admin/businesses', { status, cursor }),
+  businessVerification: (id, { decision, reason }) => post(`/admin/businesses/${enc(id)}/verification`, { decision, reason }),
+  offers: ({ status = 'active', cursor } = {}) => get('/admin/offers', { status, cursor }),
+  offerStatus: (id, { status, reason }) => post(`/admin/offers/${enc(id)}/status`, { status, reason }),
+  redemptions: ({ cursor } = {}) => get('/admin/redemptions', { cursor }),
+
+  // announcements (in-app + push)
+  announcements: () => get('/admin/announcements'),
+  announce: ({ title, body, audience, deepLink, dryRun, reason }) => post('/admin/announcements', { title, body, audience, deepLink: deepLink || null, dryRun: !!dryRun, reason }),
 
   // billing (read-only; no card data)
   subscriptions: ({ q } = {}) => get('/admin/billing/subscriptions', { q }),

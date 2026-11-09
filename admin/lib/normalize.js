@@ -1,6 +1,6 @@
 // Defensive normalisers. Response shapes are not final, so every field is read
 // from camelCase or snake_case (or a nested object) and missing data renders
-// as "—" instead of crashing.
+// as "n/a" instead of crashing.
 import { SLA_HOURS } from './format';
 
 export function g(o, ...keys) {
@@ -14,7 +14,7 @@ export function g(o, ...keys) {
 
 export const listOf = (res) => (Array.isArray(res) ? res : Array.isArray(res?.items) ? res.items : Array.isArray(res?.data) ? res.data : Array.isArray(res?.results) ? res.results : []);
 export const cursorOf = (res) => (Array.isArray(res) ? null : g(res, 'nextCursor', 'next_cursor', 'cursor.next') ?? null);
-export const shortId = (id) => (id ? String(id).slice(0, 8) : '—');
+export const shortId = (id) => (id ? String(id).slice(0, 8) : 'n/a');
 const num = (v) => (v === undefined || v === null || v === '' || Number.isNaN(Number(v)) ? undefined : Number(v));
 const bool = (v) => (v === undefined || v === null ? undefined : v === true || v === 'true' || v === 1);
 

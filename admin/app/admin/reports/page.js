@@ -78,10 +78,10 @@ export default function ReportsPage() {
                     <td>
                       <UserLink user={r.reported} />
                     </td>
-                    <td className="soft">{r.reporter?.name || '—'}</td>
-                    <td className="soft">{r.createdAt ? timeAgo(r.createdAt) : '—'}</td>
+                    <td className="soft">{r.reporter?.name || 'n/a'}</td>
+                    <td className="soft">{r.createdAt ? timeAgo(r.createdAt) : 'n/a'}</td>
                     <td>
-                      {r.status === 'appealed' ? <span className="badge pink">appeal</span> : r.slaDueAt ? <SlaTimer dueAt={r.slaDueAt} resolved={['actioned', 'dismissed'].includes(r.status)} /> : '—'}
+                      {r.status === 'appealed' ? <span className="badge pink">appeal</span> : r.slaDueAt ? <SlaTimer dueAt={r.slaDueAt} resolved={['actioned', 'dismissed'].includes(r.status)} /> : 'n/a'}
                     </td>
                     <td>
                       <StatusBadge status={r.status} />
@@ -96,7 +96,7 @@ export default function ReportsPage() {
         <LoadMore list={list} />
       </div>
       <p className="caption muted" style={{ marginTop: 12 }}>
-        Review SLA by priority — urgent 1h · high 4h · normal 24h · low 72h. Reporter identities are never shown to the reported user.
+        Review SLA by priority: urgent 1h · high 4h · normal 24h · low 72h. Reporter identities are never shown to the reported user.
       </p>
     </>
   );

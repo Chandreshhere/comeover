@@ -18,12 +18,12 @@ export function timeUntil(iso, now = Date.now()) {
 }
 
 export function dateTime(iso) {
-  if (!iso) return '—';
+  if (!iso) return 'n/a';
   return new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 export function date(iso) {
-  if (!iso) return '—';
+  if (!iso) return 'n/a';
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
@@ -37,6 +37,25 @@ export function pct(v, digits = 0) {
 
 export function num(v) {
   return Number(v).toLocaleString('en-IN');
+}
+
+// Full numbers under 10,000 (en-IN grouping), Indian compact above (12K, 1.2L, 3Cr).
+const COMPACT = typeof Intl !== 'undefined' ? new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 }) : null;
+export function compact(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 'n/a';
+  return Math.abs(n) >= 10000 && COMPACT ? COMPACT.format(n) : n.toLocaleString('en-IN');
+}
+
+// 'YYYY-MM-DD' (an IST calendar day from the API) -> '9 Nov'.
+export function dayLabel(day, opts = { day: 'numeric', month: 'short' }) {
+  if (!day) return '';
+  const d = new Date(`${day}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? String(day) : d.toLocaleDateString('en-IN', { ...opts, timeZone: 'UTC' });
+}
+
+export function rupees(v) {
+  return `₹${Math.round(Number(v) || 0).toLocaleString('en-IN')}`;
 }
 
 export function initials(name = '') {

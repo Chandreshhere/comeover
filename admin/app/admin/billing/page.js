@@ -54,13 +54,13 @@ function Subscriptions() {
                     <td>
                       <UserLink user={s.user} />
                     </td>
-                    <td style={{ textTransform: 'capitalize' }}>{s.store || '—'}</td>
-                    <td className="mono">{s.productId || '—'}</td>
+                    <td style={{ textTransform: 'capitalize' }}>{s.store || 'n/a'}</td>
+                    <td className="mono">{s.productId || 'n/a'}</td>
                     <td>
                       <StatusBadge status={s.status} />
                     </td>
                     <td>{entitled ? <span className="badge ok">{s.tier || 'paid'}</span> : <span className="badge">free</span>}</td>
-                    <td className="soft">{s.expiresAt ? date(s.expiresAt) : '—'}</td>
+                    <td className="soft">{s.expiresAt ? date(s.expiresAt) : 'n/a'}</td>
                     <td>
                       <button className="btn sm secondary" onClick={() => setOpen(open === key ? null : key)} aria-expanded={open === key}>
                         {open === key ? 'Hide' : 'Details'}
@@ -74,12 +74,12 @@ function Subscriptions() {
                           <span>
                             <span className="eyebrow">Started</span>
                             <br />
-                            {s.startedAt ? date(s.startedAt) : '—'}
+                            {s.startedAt ? date(s.startedAt) : 'n/a'}
                           </span>
                           <span>
                             <span className="eyebrow">Store transaction</span>
                             <br />
-                            <span className="mono">{s.txn || '—'}</span>
+                            <span className="mono">{s.txn || 'n/a'}</span>
                           </span>
                           <span style={{ flex: 1, minWidth: 240 }}>
                             <span className="eyebrow">Support note</span>
@@ -133,11 +133,11 @@ function Campaigns() {
               {rows.map((c, i) => (
                 <tr key={c.id || i}>
                   <td>
-                    <div style={{ fontWeight: 600 }}>{c.venue || '—'}</div>
+                    <div style={{ fontWeight: 600 }}>{c.venue || 'n/a'}</div>
                     {c.area ? <div className="caption muted">{c.area}</div> : null}
                   </td>
                   <td>
-                    {c.title || '—'}
+                    {c.title || 'n/a'}
                     <div className="caption muted">
                       {[c.days ? `${c.days} days` : null, c.startsAt ? `from ${date(c.startsAt)}` : null, c.labelled ? 'labelled' : 'NOT labelled'].filter(Boolean).join(' · ')}
                     </div>
@@ -149,7 +149,7 @@ function Campaigns() {
                   <td className="num">{fmtMaybe(c.impressions, num)}</td>
                   <td className="num">{fmtMaybe(c.joins, num)}</td>
                   <td className="num">{fmtMaybe(c.checkIns, num)}</td>
-                  <td className="num">{c.joins ? pct((c.checkIns || 0) / c.joins) : '—'}</td>
+                  <td className="num">{c.joins ? pct((c.checkIns || 0) / c.joins) : 'n/a'}</td>
                 </tr>
               ))}
             </tbody>

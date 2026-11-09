@@ -13,7 +13,7 @@ export const UNAUTHORIZED_EVENT = 'irl-admin:unauthorized';
 
 // ---------------- permissions ----------------
 const PERMISSIONS = {
-  admin: ['dashboard.view', 'reports.view', 'reports.act', 'appeals.decide', 'users.view', 'users.status', 'activities.review', 'audit.view', 'billing.view', 'taxonomy.edit'],
+  admin: ['dashboard.view', 'reports.view', 'reports.act', 'appeals.decide', 'users.view', 'users.directory', 'users.status', 'activities.review', 'audit.view', 'billing.view', 'partners.manage', 'announcements.send', 'taxonomy.edit'],
   moderator: ['reports.view', 'reports.act', 'appeals.decide', 'users.view', 'users.status', 'activities.review', 'audit.view'],
 };
 export const ROLE_LABEL = { admin: 'Admin', moderator: 'Moderator' };
@@ -81,7 +81,7 @@ const FRIENDLY = {
   session_expired: 'Your session expired. Sign in again.',
   slide_unavailable: "Couldn't send a code right now. Try again shortly.",
   auth_not_configured: 'Sign-in is not configured on the server.',
-  network: 'Network error — check your connection or the API URL / CORS settings.',
+  network: 'Network error. Check your connection, the API URL and the CORS settings.',
 };
 
 async function authPost(path, body, token) {
@@ -190,7 +190,7 @@ export async function logout() {
     try {
       await authPost('/auth/logout', { refreshToken: t.refreshToken });
     } catch {
-      // ignore — local sign-out already done
+      // ignore: local sign-out already done
     }
   }
   window.location.assign('/login?signedout=1');

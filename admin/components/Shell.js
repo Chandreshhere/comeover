@@ -12,23 +12,47 @@ const SessionContext = createContext(null);
 export const useSession = () => useContext(SessionContext);
 
 const NAV = [
-  { section: 'Overview', perm: 'dashboard.view' },
+  { section: 'Overview' },
   { href: '/admin/dashboard', label: 'Dashboard', icon: 'grid', perm: 'dashboard.view' },
   { section: 'Trust & safety' },
   { href: '/admin/reports', label: 'Reports', icon: 'flag', perm: 'reports.view' },
   { href: '/admin/activities', label: 'Activity review', icon: 'calendar', perm: 'activities.review' },
   { href: '/admin/users', label: 'Users', icon: 'users', perm: 'users.view' },
   { href: '/admin/audit', label: 'Audit log', icon: 'list', perm: 'audit.view' },
-  { section: 'Business', perm: 'billing.view' },
+  { section: 'Growth' },
+  { href: '/admin/partners', label: 'Partners', icon: 'pin', perm: 'partners.manage' },
+  { href: '/admin/announcements', label: 'Announcements', icon: 'megaphone', perm: 'announcements.send' },
+  { section: 'Business' },
   { href: '/admin/billing', label: 'Billing support', icon: 'receipt', perm: 'billing.view' },
   { href: '/admin/taxonomy', label: 'Taxonomy & quests', icon: 'tag', perm: 'taxonomy.edit' },
 ];
+
+// Keep a section heading only when at least one of its links is visible to this role.
+function visibleNav(role) {
+  const out = [];
+  let heading = null;
+  for (const n of NAV) {
+    if (n.section) {
+      heading = n;
+      continue;
+    }
+    if (n.perm && !can(role, n.perm)) continue;
+    if (heading) {
+      out.push(heading);
+      heading = null;
+    }
+    out.push(n);
+  }
+  return out;
+}
 
 // Route guard: first matching prefix decides the permission.
 const ROUTE_PERMS = [
   ['/admin/dashboard', 'dashboard.view', 'The KPI dashboard'],
   ['/admin/billing', 'billing.view', 'Billing support'],
   ['/admin/taxonomy', 'taxonomy.edit', 'Taxonomy and quest configuration'],
+  ['/admin/partners', 'partners.manage', 'Partner review'],
+  ['/admin/announcements', 'announcements.send', 'Announcements'],
   ['/admin/reports', 'reports.view', 'Reports'],
   ['/admin/activities', 'activities.review', 'Activity review'],
   ['/admin/users', 'users.view', 'User records'],
@@ -85,7 +109,7 @@ export default function Shell({ children }) {
     );
   }
 
-  const items = NAV.filter((n) => !n.perm || can(session.role, n.perm));
+  const items = visibleNav(session.role);
   const guard = ROUTE_PERMS.find(([prefix]) => pathname.startsWith(prefix));
   const allowed = !guard || can(session.role, guard[1]);
 

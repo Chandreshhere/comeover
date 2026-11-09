@@ -84,7 +84,7 @@ function Categories({ confirm, toast }) {
                       aria-label={`${c.label} active`}
                       disabled={c.risk === 'restricted' && !c.active}
                       title={c.risk === 'restricted' && !c.active ? 'Restricted categories cannot be enabled' : undefined}
-                      onClick={() => change(c, { isActive: !c.active }, c.active ? 'Deactivate — hidden from create and discovery' : 'Activate')}
+                      onClick={() => change(c, { isActive: !c.active }, c.active ? 'Deactivate: hidden from create and discovery' : 'Activate')}
                     />
                   </td>
                 </tr>
@@ -165,8 +165,8 @@ function Areas({ confirm, toast }) {
               {rows.map((a) => (
                 <tr key={a.id}>
                   <td style={{ fontWeight: 600 }}>{a.name}</td>
-                  <td className="soft">{a.city || '—'}</td>
-                  <td>{a.pilot ? <span className="badge peri">pilot</span> : <span className="muted">—</span>}</td>
+                  <td className="soft">{a.city || 'n/a'}</td>
+                  <td>{a.pilot ? <span className="badge peri">pilot</span> : <span className="muted">n/a</span>}</td>
                   <td className="num">{fmtMaybe(a.plansWeek, num)}</td>
                   <td className="num">{fmtMaybe(a.medianAcceptMin, (v) => `${v} min`)}</td>
                   <td>
@@ -261,7 +261,7 @@ function Quests({ confirm }) {
       return;
     }
     if (BANNED_QUEST_SIGNALS.test(JSON.stringify(criteria))) {
-      setJsonErr('Quests may only reward verified real-world activity — not messages, likes, swipes or app time.');
+      setJsonErr('Quests may only reward verified real-world activity, not messages, likes, swipes or app time.');
       return;
     }
     const isNew = !editing.id;

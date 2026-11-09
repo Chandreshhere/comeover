@@ -38,7 +38,7 @@ export default function AuditList({ entries = [], showTarget = false, empty = 'N
                   )
                 ) : null}
                 <span className="caption muted" title={e.at ? dateTime(e.at) : undefined}>
-                  {e.at ? timeAgo(e.at) : '—'} · {e.actorName} ({e.actorRole})
+                  {e.at ? timeAgo(e.at) : 'n/a'} · {e.actorName} ({e.actorRole})
                 </span>
               </div>
               {e.reason ? <div className="soft" style={{ marginTop: 2 }}>{e.reason}</div> : null}

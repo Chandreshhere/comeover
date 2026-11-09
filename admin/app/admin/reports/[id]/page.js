@@ -48,7 +48,7 @@ export default function ReportReviewPage() {
       <Link href="/admin/reports" className="btn sm ghost" style={{ paddingLeft: 0, marginBottom: 6 }}>
         <Icon name="back" size={14} /> Reports
       </Link>
-      <PageHead eyebrow={`Report · filed ${r.createdAt ? timeAgo(r.createdAt) : '—'}`} title={<span className="mono" style={{ fontSize: 26 }}>{String(r.id).slice(0, 8)}</span>}>
+      <PageHead eyebrow={`Report · filed ${r.createdAt ? timeAgo(r.createdAt) : 'n/a'}`} title={<span className="mono" style={{ fontSize: 26 }}>{String(r.id).slice(0, 8)}</span>}>
         <StatusBadge status={r.status} />
         <PriorityBadge priority={r.priority} />
         {r.status !== 'appealed' && r.slaDueAt ? <SlaTimer dueAt={r.slaDueAt} resolved={resolved} /> : null}
@@ -74,7 +74,7 @@ export default function ReportReviewPage() {
                     {r.reporter.name}
                   </Link>
                 ) : (
-                  <span className="label">—</span>
+                  <span className="label">n/a</span>
                 )}
                 <div className="caption muted">identity hidden from reported user</div>
               </div>
@@ -82,7 +82,7 @@ export default function ReportReviewPage() {
                 <div>
                   <div className="eyebrow">Plan context</div>
                   <div className="label">{r.activity.title || String(r.activity.id).slice(0, 8)}</div>
-                  <div className="caption muted">{[r.activity.venueType, r.activity.area].filter(Boolean).join(' · ') || '—'}</div>
+                  <div className="caption muted">{[r.activity.venueType, r.activity.area].filter(Boolean).join(' · ') || 'n/a'}</div>
                 </div>
               ) : null}
               {r.assignee ? (
@@ -135,7 +135,7 @@ export default function ReportReviewPage() {
                 <div key={a.id || i} className="row" style={{ padding: '6px 0', alignItems: 'flex-start' }}>
                   <span className="badge ink">{String(a.action).replace(/_/g, ' ')}</span>
                   <div style={{ flex: 1 }}>
-                    <div>{a.notes || '—'}</div>
+                    <div>{a.notes || 'n/a'}</div>
                     <div className="caption muted">
                       {a.createdAt ? timeAgo(a.createdAt) : ''} {a.by ? `· ${a.by}` : ''} {a.durationDays ? `· ${a.durationDays} days` : ''}
                     </div>

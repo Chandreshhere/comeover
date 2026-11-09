@@ -39,13 +39,15 @@ A user without either role can sign in but sees "No admin role".
 
 | Area | admin | moderator |
 | --- | --- | --- |
-| Dashboard (KPIs) | ✓ | — |
+| Dashboard (KPIs) | ✓ | No |
 | Reports, appeals | ✓ | ✓ |
 | Activity review | ✓ | ✓ |
 | Users (view / status) | ✓ | ✓ |
+| Users directory search | ✓ | No |
 | Audit log | ✓ | ✓ |
-| Billing support | ✓ | — |
-| Taxonomy & quests | ✓ | — |
+| Partners, announcements | ✓ | No |
+| Billing support | ✓ | No |
+| Taxonomy & quests | ✓ | No |
 
 Nav items are hidden per role, and each route is guarded: a moderator opening `/admin/billing` sees "No access". After sign-in, admins land on the dashboard and moderators on the reports queue.
 
@@ -60,7 +62,10 @@ The base is `NEXT_PUBLIC_API_URL` (already `/v1`).
 
 | Screen | Calls |
 | --- | --- |
-| Dashboard | `GET /admin/kpis?range=7d\|30d` |
+| Dashboard | `GET /admin/insights?range=7d\|30d\|90d` · `GET /admin/kpis?range=7d\|30d` (plan liquidity, urgent reports) |
+| Users list | `GET /admin/users?q&status&sort&cursor` (admin; phones masked) |
+| Partners | `GET /admin/businesses?status&cursor` · `POST /admin/businesses/{id}/verification` · `GET /admin/offers?status&cursor` · `POST /admin/offers/{id}/status {status, reason}` · `GET /admin/redemptions?cursor` |
+| Announcements | `POST /admin/announcements {title, body, audience, deepLink?, dryRun?, reason}` · `GET /admin/announcements` |
 | Reports list | `GET /admin/reports?status&cursor` |
 | Report review | `GET /admin/reports/{id}` · `POST /admin/reports/{id}/actions {action: warn\|limit\|suspend\|remove_content\|dismiss, reason, durationDays?}` · `POST /admin/reports/{id}/appeal {decision: uphold\|overturn, reason}` · `GET /admin/audit?entityType=report&entityId={id}&cursor` |
 | User detail | `GET /admin/users/{id}` · `POST /admin/users/{id}/status {status: active\|limited\|suspended, reason}` · `GET /admin/audit?entityType=user&entityId={id}&cursor` |
@@ -75,9 +80,9 @@ Request bodies this console sends (camelCase), which the backend should accept:
 - Area: `POST {city, name, latitude, longitude, active, reason}` (area centroid) · `PATCH {active, reason}`
 - Quest: `POST|PATCH {slug, title, description, criteria, xpReward, startsAt, endsAt, active, reason}`
 
-Response shapes aren't final, so `lib/normalize.js` reads both camelCase and snake_case (e.g. `reasonCode` / `reason_code`, `riskLevel` / `risk_level`) and nested objects. Missing fields render as "—". The KPI page renders whichever of these sections are present: `northStar`, `metrics` (array or object), `moderation`, `funnel`, `retention`, `clusters`. If none are present, it shows the raw response.
+Response shapes aren't final, so `lib/normalize.js` reads both camelCase and snake_case (e.g. `reasonCode` / `reason_code`, `riskLevel` / `risk_level`) and nested objects. Missing fields render as "n/a". The dashboard reads `GET /admin/insights` (see backend `docs/API.md`); every panel has an empty state and a table view. Charts are inline SVG in `components/charts.js` (no chart library, solid colours only); the palette is validated for colour-vision deficiency against the white card surface.
 
-There is no `GET /admin/users` list endpoint, so **Users** is an id lookup plus a per-tab "recently viewed" list. Users are normally opened from reports, activities or audit entries.
+**Users** is a searchable directory for admins (name, exact id, or the last 4 phone digits; status tabs; newest or recently active), plus the id lookup and a per-tab "recently viewed" list that moderators also get.
 
 ## States
 
@@ -99,7 +104,10 @@ app/
   login/                    phone OTP sign-in (Slide via the API), WhatsApp/SMS resend
   admin/layout.js           Shell: config gate, session, role nav, route guard
   admin/page.js             role-aware landing
-  admin/dashboard/          KPIs (admin)
+  admin/dashboard/          insights dashboard (admin)
+  admin/partners/           business review, offers, redemptions (admin)
+  admin/announcements/      compose, audience check, send, history (admin)
+  admin/users/              member directory (admin) and id lookup
   admin/reports/[id]/       report review, enforcement, appeal, audit trail
   admin/users/[id]/         user record, status changes, audit trail
   admin/activities/         flagged / recent plan review

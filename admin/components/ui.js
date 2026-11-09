@@ -17,6 +17,8 @@ const STATUS_TONE = {
   dismissed: '',
   appealed: 'pink',
   pending: 'peri',
+  verified: 'ok',
+  rejected: 'bad',
   flagged: 'warn',
   approved: 'ok',
   removed: 'bad',
@@ -30,10 +32,19 @@ const STATUS_TONE = {
   paused_review: 'warn',
   upheld: 'ok',
   overturned: 'pink',
+  issued: 'peri',
+  redeemed: 'ok',
+  ended: '',
+  requested: 'peri',
+  confirmed: 'ok',
+  declined: 'bad',
+  sent: 'ok',
+  sending: 'warn',
+  failed: 'bad',
 };
 
 export function StatusBadge({ status }) {
-  if (!status) return <span className="badge">—</span>;
+  if (!status) return <span className="badge">unknown</span>;
   const tone = STATUS_TONE[status] ?? '';
   return (
     <span className={`badge ${tone}`}>
@@ -45,7 +56,7 @@ export function StatusBadge({ status }) {
 
 export function PriorityBadge({ priority }) {
   const tone = priority === 'urgent' || priority === 'high' ? 'bad' : priority === 'normal' || priority === 'medium' ? 'warn' : '';
-  return <span className={`badge ${tone}`}>{priority || '—'}</span>;
+  return <span className={`badge ${tone}`}>{priority || 'none'}</span>;
 }
 
 export function ReasonLabel({ reason }) {
@@ -63,7 +74,7 @@ export function Avatar({ name = '', id = '', lg = false }) {
 }
 
 export function UserLink({ user }) {
-  if (!user?.id) return <span className="muted">—</span>;
+  if (!user?.id) return <span className="muted">Unknown</span>;
   return (
     <Link href={`/admin/users/${encodeURIComponent(user.id)}`} className="row" style={{ gap: 8 }} onClick={(e) => e.stopPropagation()}>
       <Avatar name={user.name} id={user.id} />
@@ -148,7 +159,7 @@ export function NoAccess({ what, role }) {
         <h2 className="h2">No access</h2>
       </div>
       <p className="soft">
-        {what} is available to the <b>admin</b> role{role ? ` — you are signed in as ${role}` : ''}. Ask an admin if you need access.
+        {what} is available to the <b>admin</b> role{role ? ` (you are signed in as ${role})` : ''}. Ask an admin if you need access.
       </p>
     </div>
   );
@@ -163,7 +174,7 @@ export function ConfigRequired() {
           <h1 className="h1">Configuration required</h1>
         </div>
         <p className="soft">
-          The admin console talks only to the real Project IRL API. Set these variables in <span className="mono">.env.local</span> (see <span className="mono">.env.example</span>), then rebuild — Next.js inlines <span className="mono">NEXT_PUBLIC_*</span> values at build time.
+          The admin console talks only to the real Project IRL API. Set these variables in <span className="mono">.env.local</span> (see <span className="mono">.env.example</span>), then rebuild. Next.js inlines <span className="mono">NEXT_PUBLIC_*</span> values at build time.
         </p>
         <div className="table-wrap">
           <table className="table">
@@ -300,4 +311,4 @@ export function PageHead({ eyebrow, title, children }) {
   );
 }
 
-export const fmtMaybe = (v, f = (x) => x) => (v === undefined || v === null || Number.isNaN(v) ? '—' : f(v));
+export const fmtMaybe = (v, f = (x) => x) => (v === undefined || v === null || Number.isNaN(v) ? 'n/a' : f(v));

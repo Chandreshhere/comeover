@@ -48,7 +48,7 @@ function ReportTable({ rows, empty }) {
               <td>
                 <PriorityBadge priority={r.priority} />
               </td>
-              <td className="soft">{r.createdAt ? timeAgo(r.createdAt) : '—'}</td>
+              <td className="soft">{r.createdAt ? timeAgo(r.createdAt) : 'n/a'}</td>
               <td>
                 <StatusBadge status={r.status} />
               </td>
@@ -137,13 +137,13 @@ export default function UserDetailPage() {
                 ok={u.ageVerified}
                 icon="check"
                 title="18+ attestation"
-                detail={u.ageVerified ? [u.ageMethod?.replace(/_/g, ' '), u.ageVerifiedAt ? date(u.ageVerifiedAt) : null].filter(Boolean).join(' · ') || 'attested' : u.ageVerified === false ? 'Not attested — cannot join or publish' : 'Unknown'}
+                detail={u.ageVerified ? [u.ageMethod?.replace(/_/g, ' '), u.ageVerifiedAt ? date(u.ageVerifiedAt) : null].filter(Boolean).join(' · ') || 'attested' : u.ageVerified === false ? 'Not attested, so they cannot join or publish' : 'Unknown'}
               />
               <Marker ok={u.idVerified} icon="id" title="Higher-trust verification" detail={u.idVerified ? 'Passed' : u.idVerified === false ? 'Not completed (optional)' : 'Unknown'} />
             </div>
             <div className="card">
               <h2 className="h3">Reliability</h2>
-              <div style={{ fontSize: 40, fontWeight: 700, lineHeight: '46px', marginTop: 6 }}>{u.reliability != null ? pct(u.reliability) : '—'}</div>
+              <div style={{ fontSize: 40, fontWeight: 700, lineHeight: '46px', marginTop: 6 }}>{u.reliability != null ? pct(u.reliability) : 'n/a'}</div>
               <Bar value={u.reliability} color={u.reliability != null && u.reliability < 0.8 ? 'var(--danger)' : 'var(--ink)'} />
               <div className="row wrap caption soft" style={{ gap: 12, marginTop: 10 }}>
                 {u.completed != null ? <span>{u.completed} completed</span> : null}
@@ -160,7 +160,7 @@ export default function UserDetailPage() {
                   </div>
                   <Bar value={u.riskScore} color={u.riskScore > 0.6 ? 'var(--danger)' : 'var(--orange)'} />
                   <p className="caption muted" style={{ marginBottom: 0 }}>
-                    Signal only — never an automatic sanction.
+                    Signal only, never an automatic sanction.
                   </p>
                 </>
               ) : null}
@@ -192,9 +192,9 @@ export default function UserDetailPage() {
                 {u.id}
               </dd>
               <dt className="caption muted">Phone</dt>
-              <dd style={{ margin: 0 }}>{u.phone || '—'}</dd>
+              <dd style={{ margin: 0 }}>{u.phone || 'n/a'}</dd>
               <dt className="caption muted">Last active</dt>
-              <dd style={{ margin: 0 }}>{u.lastActiveAt ? dateTime(u.lastActiveAt) : '—'}</dd>
+              <dd style={{ margin: 0 }}>{u.lastActiveAt ? dateTime(u.lastActiveAt) : 'n/a'}</dd>
               <dt className="caption muted">Plan</dt>
               <dd style={{ margin: 0 }}>{u.subscription ? `${u.subscription.tier || u.subscription.productId || 'paid'} · ${String(u.subscription.status).replace(/_/g, ' ')}` : 'Free'}</dd>
             </dl>
