@@ -1,4 +1,19 @@
-import { computeShares, itemisedBreakdown, ledgerTotals, newDraft, peoplePool, toMinor, upiUrl } from '../src/features/splitmate/lib/split';
+import {
+  computeShares,
+  equalAmounts,
+  evenPercents,
+  fillBlanks,
+  itemisedBreakdown,
+  ledgerTotals,
+  minorToInput,
+  money,
+  nameOf,
+  newDraft,
+  peoplePool,
+  stateMeta,
+  toMinor,
+  upiUrl,
+} from '../src/features/splitmate/lib/split';
 
 const sumShares = (r) => r.shares.reduce((n, s) => n + s.amountMinor, 0);
 
@@ -69,6 +84,78 @@ describe('SplitMate maths (always exact to the paisa)', () => {
     expect(toMinor('149.5')).toBe(14950);
     expect(toMinor('₹1,200')).toBe(120000);
     expect(toMinor('')).toBe(0);
+    expect(toMinor('.')).toBe(0);
+  });
+});
+
+describe('Review split prefills (exact, valid from the start)', () => {
+  it('equal amounts sum exactly and prefill a valid custom split', () => {
+    const ids = ['me', 'a', 'b'];
+    const amounts = equalAmounts(100001, ids);
+    expect(Object.values(amounts).reduce((n, x) => n + x, 0)).toBe(100001);
+    expect(Math.max(...Object.values(amounts)) - Math.min(...Object.values(amounts))).toBeLessThanOrEqual(1);
+    const r = computeShares(newDraft({ participants: ids, method: 'custom', totalMinor: 100001, custom: amounts }));
+    expect(r.valid).toBe(true);
+    expect(equalAmounts(0, ids)).toEqual({ me: 0, a: 0, b: 0 });
+  });
+
+  it('round-trips prefilled custom amounts through the text inputs', () => {
+    const ids = ['me', 'a', 'b', 'c', 'd', 'e', 'f'];
+    const total = 98765;
+    const text = Object.fromEntries(Object.entries(equalAmounts(total, ids)).map(([k, v]) => [k, minorToInput(v)]));
+    const back = Object.fromEntries(Object.entries(text).map(([k, v]) => [k, toMinor(v)]));
+    expect(computeShares(newDraft({ participants: ids, method: 'custom', totalMinor: total, custom: back })).valid).toBe(true);
+  });
+
+  it('even percentages always total exactly 100', () => {
+    for (let n = 1; n <= 12; n++) {
+      const ids = Array.from({ length: n }, (_, i) => `u${i}`);
+      const pct = evenPercents(ids);
+      const bp = Object.values(pct).reduce((s, p) => s + Math.round(p * 100), 0);
+      expect(bp).toBe(10000);
+      Object.values(pct).forEach((p) => expect(String(p)).toMatch(/^\d+(\.\d{1,2})?$/)); // at most two decimals
+      const r = computeShares(newDraft({ participants: ids, method: 'percentage', totalMinor: 123457, percent: pct }));
+      expect(r.valid).toBe(true);
+      expect(r.shares.reduce((s, x) => s + x.amountMinor, 0)).toBe(123457);
+    }
+    expect(evenPercents(['me', 'a', 'b'])).toEqual({ me: 33.34, a: 33.33, b: 33.33 });
+  });
+
+  it('fills only the blank rows with what is left', () => {
+    const ids = ['me', 'a', 'b'];
+    const next = fillBlanks({ me: 40000, a: 0, b: 0 }, ids, 100001);
+    expect(next.me).toBe(40000);
+    expect(next.a + next.b).toBe(60001);
+    expect(computeShares(newDraft({ participants: ids, method: 'custom', totalMinor: 100001, custom: next })).valid).toBe(true);
+    expect(fillBlanks({ me: 50000, a: 50000, b: 0 }, ids, 100000)).toBeNull(); // nothing left
+    expect(fillBlanks({ me: 30000, a: 30000, b: 30000 }, ids, 100000)).toBeNull(); // nobody blank
+  });
+
+  it('formats inputs and money without float noise or NaN', () => {
+    expect(minorToInput(33334)).toBe('333.34');
+    expect(minorToInput(33330)).toBe('333.30');
+    expect(minorToInput(25000)).toBe('250');
+    expect(minorToInput(5)).toBe('0.05');
+    expect(minorToInput(0)).toBe('');
+    expect(minorToInput(undefined)).toBe('');
+    expect(money(123456789)).toBe('₹12,34,567.89');
+    expect(money(100000)).toBe('₹1,000');
+    expect(money(33330)).toBe('₹333.30');
+    expect(money(0)).toBe('₹0');
+    expect(money(NaN)).toBe('₹0');
+    expect(money(-2550)).toBe('−₹25.50');
+  });
+
+  it('error copy uses exact money and falls back to a neutral name', () => {
+    const r = computeShares(newDraft({ participants: ['me', 'a'], method: 'custom', totalMinor: 50000, custom: { me: 20000, a: 29970 } }));
+    expect(r.error).toBe('₹0.30 still unassigned.');
+    expect(nameOf('me', 'You (Asha)')).toBe('You (Asha)');
+    expect(nameOf('nobody-cached')).toBe('Member');
+  });
+
+  it('status meta is built on demand for every share state', () => {
+    const m = stateMeta();
+    ['unsettled', 'marked_paid', 'confirmed', 'disputed'].forEach((k) => expect(m[k].label).toBeTruthy());
   });
 });
 

@@ -1,4 +1,4 @@
-// Global client state (zustand v5). All data comes from the Project IRL API;
+// Global client state (zustand v5). All data comes from the Come Over API;
 // nothing is seeded. Persistence keeps only device-local preferences, the
 // create-flow draft and an offline snapshot for display while reconnecting.
 //
@@ -20,6 +20,7 @@ import config, { isConfigured } from '@/config';
 import { applyTaxonomy, areaCentroids, categoryBySlug, CITY_CENTER, levels as levelTable, setUserSource } from '@/data/catalog';
 import realtime from '@/services/realtime';
 import { getCoarsePosition } from '@/services/location';
+import { planCompat, rankPeople, SOCIAL_STYLES } from '@/utils/socialMatch';
 
 const nowIso = () => new Date().toISOString();
 // The API takes discovery radius in kilometres and rejects values outside 0.2–25.
@@ -54,18 +55,24 @@ const initialPrefs = {
   radiusKm: config.DEFAULT_RADIUS_KM,
   notifications: { enabled: false, nearby: true, joinRequests: true, messages: true, questReminders: false, productUpdates: false, quietEnabled: true, quietStart: '22:00', quietEnd: '08:00' },
   haptics: true,
-  sound: false,
+  sound: true, // UI sound effects (pops, chimes) with animations
   analyticsConsent: false,
   dailyStreakOptIn: false,
   showOnRadar: true,
   language: 'English',
+  appearance: 'light', // light (default, pastel) | dark | system (device-only)
+  guideVoice: true, // the intro guide reads its lines aloud (device-only)
+  introSeen: false, // 3-page intro carousel finished or skipped (device-only)
+  tourDone: false, // first-run app tour finished or skipped (device-only)
+  socialStyleAsked: false, // "What are you?" was shown once to an already-onboarded account (device-only)
 };
-const DEVICE_ONLY_PREFS = new Set(['coords', 'haptics', 'sound']);
+const DEVICE_ONLY_PREFS = new Set(['coords', 'haptics', 'sound', 'appearance', 'guideVoice', 'introSeen', 'tourDone', 'socialStyleAsked']);
+const keepDevicePrefs = (p) => Object.fromEntries([...DEVICE_ONLY_PREFS].filter((k) => p[k] !== undefined).map((k) => [k, p[k]]));
 
 const initialState = {
   boot: { ready: false, configured: isConfigured(), offline: false },
   session: { serverId: null, phone: null, verified: false, ageConfirmed: false, termsAcceptedAt: null, onboarded: false, status: 'active' },
-  profile: { id: 'me', name: '', bio: '', avatarSeed: 'me-irl', avatarKey: null, avatarUri: null, city: '', area: '', interests: [], intents: [], visibility: 'discoverable', boundaries: '', pronouns: '', languages: [] },
+  profile: { id: 'me', name: '', bio: '', avatarSeed: 'me-irl', avatarKey: null, avatarUri: null, city: '', area: '', interests: [], intents: [], visibility: 'discoverable', boundaries: '', pronouns: '', languages: [], socialStyle: null },
   prefs: initialPrefs,
   availability: { status: 'busy', until: null, activities: [] },
   filters: { distanceKm: config.DEFAULT_RADIUS_KM, when: 'any', groupSize: 'any', level: 'any', accessible: false, freeOnly: false, categories: [] },
@@ -114,14 +121,33 @@ const initialState = {
 };
 
 // ---------- normalisers ----------
-function mergeUsers(users, list) {
+// 'introvert' | 'ambivert' | 'extrovert' | null (anything else from the wire → null).
+export const normSocialStyle = (v) => (SOCIAL_STYLES.includes(v) ? v : null);
+export function mergeUsers(users, list) {
   if (!list?.length) return users;
   const next = { ...users };
   list.forEach((u) => {
-    if (u?.id && u.id !== 'me') next[u.id] = { ...(next[u.id] || {}), ...u };
+    if (!u?.id || u.id === 'me') return;
+    const merged = { ...(next[u.id] || {}), ...u };
+    // Partial payloads (e.g. chat member names) keep the cached style.
+    if (merged.socialStyle !== undefined) merged.socialStyle = normSocialStyle(merged.socialStyle);
+    next[u.id] = merged;
   });
   return next;
 }
+// Gentle social-style nudge for a page of plans (mirrors backend lib/socialMatch.rankPlans):
+// the server order stays the main signal — a plan only overtakes a neighbour that
+// suits the style clearly worse, moves at most ~2 places, and nothing is dropped.
+export function rankPlansForStyle(plans, style, weight = 3) {
+  if (!SOCIAL_STYLES.includes(style) || !plans || plans.length < 2) return plans || [];
+  const key = (i, a) => Math.round((i - (planCompat(style, a) - 0.6) * weight) * 1e9) / 1e9;
+  return plans
+    .map((a, i) => ({ a, i, k: key(i, a) }))
+    .sort((x, y) => x.k - y.k || x.i - y.i)
+    .map((x) => x.a);
+}
+// Nearby people, best social match first (stable; nobody is hidden).
+export const rankPeopleForStyle = (people, style) => rankPeople(people || [], normSocialStyle(style));
 function hostsOf(list) {
   return list.map((a) => a.host).filter(Boolean);
 }
@@ -190,6 +216,7 @@ function mapMe(me = {}) {
       pronouns: p.pronouns || '',
       languages: p.languages || [],
       availabilityWindows: p.availabilityWindows || [],
+      socialStyle: normSocialStyle(p.socialStyle),
       reliability: p.reliability ?? null,
     },
   };
@@ -320,12 +347,16 @@ export const useAppStore = create(
             set((s) => ({ boot: { ...s.boot, ready: true, configured: true }, session: { ...initialState.session } }));
             return;
           }
+          // Open straight away from the cached snapshot (session flags, profile,
+          // prefs, progress) and refresh from the server in the background. The
+          // API host can take 20 s+ to wake up; never hold the UI on that.
+          set((s) => ({ boot: { ...s.boot, ready: true, configured: true } }));
           try {
             await get().bootstrap();
-            set((s) => ({ boot: { ...s.boot, ready: true, configured: true, offline: false } }));
+            set((s) => ({ boot: { ...s.boot, offline: false } }));
           } catch (e) {
             // Offline/unreachable: keep the cached snapshot and let screens retry.
-            set((s) => ({ boot: { ...s.boot, ready: true, configured: true, offline: e.code === 'network' || e.code === 'timeout' } }));
+            set((s) => ({ boot: { ...s.boot, offline: e.code === 'network' || e.code === 'timeout' } }));
           }
         },
         bootstrap: async () => {
@@ -335,7 +366,7 @@ export const useAppStore = create(
           const m = mapMe(r.me);
           set((s) => ({
             ...m,
-            prefs: { ...s.prefs, ...(r.me?.prefs || {}), coords: s.prefs.coords, haptics: s.prefs.haptics, sound: s.prefs.sound },
+            prefs: { ...s.prefs, ...(r.me?.prefs || {}), ...keepDevicePrefs(s.prefs) },
             availability: r.me?.availability || s.availability,
             progress: mapProgress(r.progress, s.progress),
             unread: r.unread || s.unread,
@@ -405,7 +436,7 @@ export const useAppStore = create(
           }
           await clearSession();
           setSelfId(null);
-          set({ ...initialState, boot: { ready: true, configured: isConfigured(), offline: false }, prefs: { ...initialPrefs, haptics: get().prefs.haptics } });
+          set({ ...initialState, boot: { ready: true, configured: isConfigured(), offline: false }, prefs: { ...initialPrefs, haptics: get().prefs.haptics, appearance: get().prefs.appearance, guideVoice: get().prefs.guideVoice, introSeen: get().prefs.introSeen } });
         },
         deleteAccount: async () => {
           await E.me.remove();
@@ -418,6 +449,17 @@ export const useAppStore = create(
           set((s) => ({ profile: { ...s.profile, ...patch } }));
           const { avatarUri, avatarSeed, id, ...server } = patch; // avatarUri is a display URL; avatarKey is what the server stores
           if (avatarSeed) server.avatarSeed = avatarSeed;
+          if (patch.socialStyle !== undefined) {
+            server.socialStyle = normSocialStyle(patch.socialStyle);
+            // Re-rank the people already on screen for the new style.
+            set((s) => ({
+              profile: { ...s.profile, socialStyle: server.socialStyle },
+              nearbyPeopleIds: rankPeopleForStyle(
+                s.nearbyPeopleIds.map((uid) => s.users[uid] || { id: uid }),
+                server.socialStyle
+              ).map((u) => u.id),
+            }));
+          }
           if (Object.keys(server).length) pushProfile(server);
         },
         toggleInterest: (slug) => {
@@ -480,7 +522,9 @@ export const useAppStore = create(
                 cursor: more ? get().feedCursor : undefined,
               };
               const [list, featured] = await Promise.all([E.discovery.activities(params), more ? null : quiet(E.discovery.featured({ lat: params.lat, lng: params.lng }))]);
-              const items = itemsOf(list);
+              // Gentle social-style nudge within this page, unless the server already applied it.
+              const myStyle = get().profile.socialStyle;
+              const items = list?.rankedFor && list.rankedFor === myStyle ? itemsOf(list) : rankPlansForStyle(itemsOf(list), myStyle);
               const feat = featured ? itemsOf(featured)[0] || featured.activity || (featured.id ? featured : null) : null;
               set((s) => ({
                 ...upsertActivities(s, feat ? [feat, ...items] : items),
@@ -512,7 +556,9 @@ export const useAppStore = create(
         loadNearbyPeople: () =>
           run('nearbyPeople', async () => {
             const c = await discoveryCoords();
-            const items = itemsOf(await E.discovery.nearbyPeople({ lat: c.latitude, lng: c.longitude, radius: clampRadiusKm(get().prefs.radiusKm) })); // km
+            const raw = itemsOf(await E.discovery.nearbyPeople({ lat: c.latitude, lng: c.longitude, radius: clampRadiusKm(get().prefs.radiusKm) })); // km
+            // Best social-energy match first (the server ranks too; this is stable, so it agrees).
+            const items = rankPeopleForStyle(raw, get().profile.socialStyle);
             set((s) => ({ users: mergeUsers(s.users, items), nearbyPeopleIds: items.map((u) => u.id) }));
             return items;
           }),
@@ -619,7 +665,8 @@ export const useAppStore = create(
             accessibility: d.accessibility,
           };
           const a = await E.activities.create(body, d.clientKey || `create:${d.startsAt}:${d.title}`);
-          set((s) => ({ ...upsertActivities(s, [a]), draft: { ...initialDraft, area: s.profile.area } }));
+          // Show the new plan straight away on Home (top of the feed), even before the next reload.
+          set((s) => ({ ...upsertActivities(s, [a]), feedIds: [a.id, ...(s.feedIds || []).filter((x) => x !== a.id)], draft: { ...initialDraft, area: s.profile.area } }));
           quiet(get().loadConversations({ silent: true }));
           return get().activities.find((x) => x.id === a.id) || a;
         },
@@ -906,7 +953,7 @@ export const useAppStore = create(
     },
     {
       name: 'irl-store',
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => AsyncStorage),
       // Device-local prefs + draft + a small offline snapshot. No tokens (Keychain).
       partialize: (s) => ({
@@ -927,7 +974,8 @@ export const useAppStore = create(
           progress: { ...current.progress, ...(p.progress || {}) },
         };
       },
-      migrate: () => ({}), // v1 held demo data — discard it.
+      // v1 held demo data: discard it. v2 → v3: UI sounds on by default; light (pastel) is the default look.
+      migrate: (persisted, version) => (version === 2 && persisted ? { ...persisted, prefs: { ...(persisted.prefs || {}), sound: true, appearance: persisted.prefs?.appearance === 'dark' ? 'dark' : 'light' } } : {}),
     }
   )
 );

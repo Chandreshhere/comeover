@@ -36,6 +36,13 @@
                      restorationHandler:restorationHandler];
 }
 
+// Same ink as the launch screen and the animated JS splash: no white flash.
+- (void)customizeRootView:(RCTRootView *)rootView
+{
+  [super customizeRootView:rootView];
+  rootView.backgroundColor = [UIColor colorWithRed:11 / 255.0 green:12 / 255.0 blue:18 / 255.0 alpha:1];
+}
+
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge
 {
   return [self bundleURL];

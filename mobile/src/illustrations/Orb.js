@@ -11,7 +11,8 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Circle, Defs, Ellipse, G, RadialGradient, Stop } from 'react-native-svg';
+import Svg, { Circle, Ellipse, G } from 'react-native-svg';
+import { colors, isDark } from '../theme/tokens';
 
 const RINGS = [0, 30, 60, 90, 120, 150];
 
@@ -27,7 +28,7 @@ function Layer({ size, tilt, opacity }) {
             cy={r}
             rx={r * 0.86}
             ry={r * 0.32}
-            stroke="#FFFFFF"
+            stroke={colors.pureWhite}
             strokeWidth={1.4}
             fill="none"
             transform={`rotate(${deg} ${r} ${r})`}
@@ -57,6 +58,17 @@ export default function Orb({ size = 180, listening = false }) {
   }, [listening, reduce]);
 
   const a = useAnimatedStyle(() => ({ transform: [{ rotate: `${spin.value}deg` }, { scale: breathe.value }] }));
+  // The orb is light on a brand surface: three flat, concentric white discs
+  // (no gradients) — a wide faint halo, a brighter ring and a soft core. In
+  // dark mode everything is dimmer so it glows gently instead of punching a
+  // white hole in the indigo hero.
+  const dark = isDark();
+  const glow = [
+    { r: 0.42, a: dark ? 0.06 : 0.14 },
+    { r: 0.31, a: dark ? 0.09 : 0.2 },
+    { r: 0.19, a: dark ? 0.4 : 0.8 },
+  ];
+  const white = colors.pureWhite;
   const b = useAnimatedStyle(() => ({ transform: [{ rotate: `${-spin.value * 0.6}deg` }, { scale: breathe.value }] }));
 
   return (
@@ -67,14 +79,9 @@ export default function Orb({ size = 180, listening = false }) {
       accessibilityLabel={listening ? 'Assistant is listening' : 'Assistant'}
     >
       <Svg width={size} height={size} style={{ position: 'absolute' }}>
-        <Defs>
-          <RadialGradient id="orbGlow" cx="50%" cy="50%" r="50%">
-            <Stop offset="0" stopColor="#FFFFFF" stopOpacity="0.95" />
-            <Stop offset="0.45" stopColor="#FFFFFF" stopOpacity="0.35" />
-            <Stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
-          </RadialGradient>
-        </Defs>
-        <Circle cx={size / 2} cy={size / 2} r={size * 0.42} fill="url(#orbGlow)" />
+        {glow.map((g) => (
+          <Circle key={g.r} cx={size / 2} cy={size / 2} r={size * g.r} fill={white} fillOpacity={g.a} />
+        ))}
       </Svg>
       <Animated.View style={[{ position: 'absolute' }, a]}>
         <Layer size={size * 0.9} tilt={-20} opacity={0.85} />
@@ -91,7 +98,7 @@ export default function Orb({ size = 180, listening = false }) {
           [0.2, 0.82, 2.2],
           [0.7, 0.9, 1.4],
         ].map(([x, y, r], i) => (
-          <Circle key={i} cx={x * size} cy={y * size} r={r} fill="#FFFFFF" opacity={0.85} />
+          <Circle key={i} cx={x * size} cy={y * size} r={r} fill={white} opacity={0.85} />
         ))}
       </Svg>
     </View>

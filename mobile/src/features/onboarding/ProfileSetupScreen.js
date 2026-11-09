@@ -1,14 +1,15 @@
-// profile_setup — name, short bio, illustrated avatar (or optional photo).
+// profile_setup — name, short bio and an avatar: a personality vibe + skin tone
+// (a warm default is preselected), or an optional photo.
 import React, { useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { AppText, Avatar, Button, TextField } from '@/components';
+import { shuffleAvatar, starterAvatar } from '@/illustrations/avatarPresets';
 import { useAppStore } from '@/store/useAppStore';
 import { colors, space } from '@/theme/tokens';
+import AvatarPicker from '../profile/components/AvatarPicker';
 import useAvatarPicker from '../profile/useAvatarPicker';
 import OnboardingFrame from './components/OnboardingFrame';
-
-const randomSeed = () => `me-${Math.random().toString(36).slice(2, 8)}`;
 
 export default function ProfileSetupScreen() {
   const nav = useNavigation();
@@ -17,7 +18,7 @@ export default function ProfileSetupScreen() {
 
   const [name, setName] = useState(profile.name);
   const [bio, setBio] = useState(profile.bio);
-  const [seed, setSeed] = useState(profile.avatarSeed);
+  const [seed, setSeed] = useState(() => starterAvatar(profile.avatarSeed));
   const avatar = useAvatarPicker({ uri: profile.avatarUri, key: profile.avatarKey });
   const [touched, setTouched] = useState(false);
 
@@ -36,22 +37,23 @@ export default function ProfileSetupScreen() {
     <OnboardingFrame
       stepId="profile_setup"
       keyboard
-      title="How should people know you?"
-      subtitle="First name is enough. Keep it friendly — this shows on plans you host or join."
+      title="What's your name?"
+      subtitle="First name is enough. It shows on plans you host or join."
       footer={<Button title={avatar.uploading ? 'Uploading photo…' : 'Continue'} onPress={next} disabled={!trimmed || avatar.uploading} />}
     >
       <View style={{ alignItems: 'center' }}>
         <View>
-          <Avatar seed={seed} uri={avatar.uri} size={116} ring ringColor={colors.surface} label="Your avatar preview" />
+          <Avatar seed={seed} uri={avatar.uri} size={104} ring ringColor={colors.surface} animated label="Your avatar preview" />
           {avatar.uploading && (
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 58, backgroundColor: colors.scrim, alignItems: 'center', justifyContent: 'center' }} accessibilityLabel="Uploading photo">
-              <ActivityIndicator color={colors.white} />
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 52, backgroundColor: colors.scrim, alignItems: 'center', justifyContent: 'center' }} accessibilityLabel="Uploading photo">
+              <ActivityIndicator color={colors.pureWhite} />
             </View>
           )}
         </View>
-        <View style={{ flexDirection: 'row', gap: space.xs, marginTop: space.md }}>
+        {/* Photos are optional: a vibe avatar is the default. */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: space.xs, marginTop: space.md }}>
           <Button
-            title="Shuffle avatar"
+            title="Shuffle look"
             icon="shuffle"
             size="sm"
             variant="secondary"
@@ -59,7 +61,7 @@ export default function ProfileSetupScreen() {
             disabled={avatar.uploading}
             onPress={() => {
               avatar.clear();
-              setSeed(randomSeed());
+              setSeed(shuffleAvatar(seed));
             }}
           />
           <Button title={avatar.uri ? 'Change photo' : 'Add photo'} icon="image" size="sm" variant="secondary" full={false} disabled={avatar.uploading} onPress={avatar.pick} />
@@ -69,9 +71,6 @@ export default function ProfileSetupScreen() {
             {avatar.error}
           </AppText>
         )}
-        <AppText variant="caption" color={colors.muted} align="center" style={{ marginTop: space.xs }}>
-          Photos are optional. Illustrated avatars are just as welcome.
-        </AppText>
       </View>
 
       <View style={{ marginTop: space.xl }}>
@@ -93,9 +92,21 @@ export default function ProfileSetupScreen() {
           placeholder="New in Ahmedabad, always up for chai and a walk."
           multiline
           maxLength={240}
-          helper="No phone numbers or social handles — share those only when you're ready."
+          helper="No phone numbers or social handles."
         />
       </View>
+
+      {/* Pick a vibe (a warm default is already chosen); picking clears a photo. */}
+      <AvatarPicker
+        compact
+        value={seed}
+        onChange={(picked) => {
+          if (avatar.uploading) return;
+          avatar.clear();
+          setSeed(picked);
+        }}
+        style={{ marginTop: space.md }}
+      />
     </OnboardingFrame>
   );
 }

@@ -1,14 +1,18 @@
 // inbox — activity group chats and direct conversations (GET /conversations).
+// Chats only open after a host accepts a join request; mute/report/block live
+// in each chat's ⋯ menu, and the thread shows the safety tip where it matters.
 import React, { useMemo, useState } from 'react';
 import { Pressable, RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Avatar, Icon, Pictogram, QueryState, Screen, ScreenHeader, Segmented } from '@/components';
+import { AppText, Avatar, Icon, Pictogram, QueryState, Screen, ScreenHeader, Segmented, usePressScale } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
-import { accents, colors, radius, space } from '@/theme/tokens';
+import { accents, colors, fonts, radius, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
 import { latestMessage, nameOf, otherMember, personOf, stampLabel } from './chatUtils';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const FILTERS = [
   { value: 'all', label: 'All' },
@@ -16,59 +20,60 @@ const FILTERS = [
   { value: 'direct', label: 'Direct' },
 ];
 
+const LEAD = 48;
+
+// Two-line row: title + time, then the latest message + unread count.
 function ConversationRow({ conv, activity, last, users, onPress, isLast }) {
   const isGroup = conv.kind !== 'direct';
   const other = otherMember(conv);
   const title = isGroup ? activity?.title || conv.title : conv.title || nameOf(other, null, users);
   const sender = last ? (last.senderId === 'system' ? '' : last.senderId === 'me' ? 'You: ' : isGroup ? `${nameOf(last.senderId, null, users)}: ` : '') : '';
-  const preview = last ? `${sender}${last.body || 'Attachment'}` : isGroup ? 'Group chat is open' : 'Say hi 👋';
+  const preview = last ? `${sender}${last.body || 'Attachment'}` : isGroup ? 'Group chat is open' : 'Say hi!';
   const accent = accents[(activity?.accentIndex ?? 0) % accents.length].bg;
-  const memberCount = conv.memberIds?.length || conv.memberCount || 0;
+  const stamp = stampLabel(last?.createdAt) || (activity ? stampLabel(activity.startsAt) : '');
+  const press = usePressScale(0.98);
   return (
-    <Pressable
+    <AnimatedPressable
       onPress={onPress}
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
       accessibilityRole="button"
-      accessibilityLabel={`${title}. ${preview}.${conv.unread ? ` ${conv.unread} unread.` : ''}${conv.muted ? ' Muted.' : ''}`}
-      android_ripple={{ color: colors.track }}
-      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: isLast ? 0 : 1, borderBottomColor: colors.border, minHeight: 72 }}
+      accessibilityLabel={`${isGroup ? 'Plan chat' : 'Direct chat'}: ${title}. ${preview}.${conv.unread ? ` ${conv.unread} unread.` : ''}${conv.muted ? ' Muted.' : ''}`}
+      style={[{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm, borderBottomWidth: isLast ? 0 : 1, borderBottomColor: colors.border, minHeight: 72 }, press.style]}
     >
       {isGroup ? (
-        <View style={{ width: 52, height: 52, borderRadius: 18, backgroundColor: accent, alignItems: 'center', justifyContent: 'center' }}>
-          <Pictogram name={activity?.pictogram || 'people'} size={26} />
+        <View style={{ width: LEAD, height: LEAD, borderRadius: 16, backgroundColor: accent, alignItems: 'center', justifyContent: 'center' }}>
+          <Pictogram name={activity?.pictogram || 'people'} size={24} color={colors.ink} />
         </View>
       ) : (
-        <Avatar seed={other} uri={personOf(other, users)?.avatarUrl} size={52} />
+        <Avatar seed={other} uri={personOf(other, users)?.avatarUrl} size={LEAD} />
       )}
       <View style={{ flex: 1, marginLeft: space.sm }}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <AppText variant="bodyStrong" numberOfLines={1} style={{ flex: 1 }}>
             {title}
           </AppText>
-          <AppText variant="caption" color={conv.unread ? colors.deep : colors.muted} style={{ marginLeft: space.xs }}>
-            {stampLabel(last?.createdAt)}
-          </AppText>
+          {!!stamp && (
+            <AppText variant="caption" color={conv.unread ? colors.deep : colors.muted} numberOfLines={1} style={{ marginLeft: space.xs }}>
+              {stamp}
+            </AppText>
+          )}
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-          {conv.muted && <Icon name="bell-off" size={12} color={colors.muted} style={{ marginRight: 4 }} />}
-          <AppText variant="caption" color={conv.unread ? colors.ink : colors.muted} numberOfLines={1} style={{ flex: 1, fontFamily: conv.unread ? 'Poppins-SemiBold' : undefined }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, minHeight: 20 }}>
+          {conv.muted && <Icon name="bell-off" size={12} color={colors.muted} style={{ marginRight: space.xxs }} />}
+          <AppText variant="caption" color={conv.unread ? colors.ink : colors.muted} numberOfLines={1} style={{ flex: 1, fontFamily: conv.unread ? fonts.semibold : undefined }}>
             {preview}
           </AppText>
           {conv.unread > 0 && (
             <View style={{ minWidth: 20, height: 20, borderRadius: 10, backgroundColor: conv.muted ? colors.muted : colors.ink, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5, marginLeft: space.xs }}>
-              <AppText variant="caption" color={colors.white}>
-                {conv.unread}
+              <AppText variant="caption" color={colors.white} maxScale={1.1}>
+                {conv.unread > 99 ? '99+' : conv.unread}
               </AppText>
             </View>
           )}
         </View>
-        {isGroup && (
-          <AppText variant="caption" color={colors.muted} numberOfLines={1} style={{ marginTop: 2 }}>
-            {memberCount ? `${memberCount} in group · ` : ''}
-            {activity ? stampLabel(activity.startsAt) : 'plan chat'}
-          </AppText>
-        )}
       </View>
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
@@ -96,7 +101,7 @@ export default function InboxScreen() {
 
   const empty = {
     title: filter === 'direct' ? 'No direct chats yet' : 'No chats yet',
-    body: filter === 'direct' ? 'Direct chats open with people you’ve shared an accepted plan with.' : 'When a host accepts you, the plan’s group chat appears here.',
+    body: filter === 'direct' ? 'They open with people you’ve shared a plan with.' : 'A plan’s group chat appears once the host accepts you.',
     cta: 'Find a plan',
     onCta: () => nav.navigate('main', { screen: 'discover_home' }),
   };
@@ -123,13 +128,6 @@ export default function InboxScreen() {
           Couldn't refresh your chats. Pull down to try again.
         </AppText>
       )}
-
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: space.lg, paddingHorizontal: space.xs }}>
-        <Icon name="shield" size={14} color={colors.muted} style={{ marginTop: 2 }} />
-        <AppText variant="caption" color={colors.muted} style={{ flex: 1, marginLeft: 6 }}>
-          Chats only open after a host accepts a join request, so nobody can message you out of the blue. Mute, report and block live in every chat’s menu.
-        </AppText>
-      </View>
     </Screen>
   );
 }

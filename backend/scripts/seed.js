@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // Reference/taxonomy data only (no demo users or plans). Idempotent upserts.
-//   npm run seed            (uses MONGODB_URI)
+//   npm run seed                                  (uses MONGODB_URI; resets seeded fields to these values)
+//   node scripts/seed.js --only-missing           (adds missing entries only; never overwrites admin-console edits)
 const db = require('../src/lib/db');
 
 const CATEGORIES = [
@@ -19,10 +20,14 @@ const CATEGORIES = [
   ['music', 'Music & jams', 'Music', 'music', 'standard', 120],
   ['photo', 'Photography', 'Photo', 'camera', 'standard', 130],
   ['explore', 'City explore', 'Explore', 'pin', 'elevated', 140],
+  ['thrifting', 'Thrifting', 'Thrift', 'thrift', 'standard', 150],
+  // 18+ app; tobacco only. 'elevated' puts these plans in the moderators' flagged queue
+  // for a look (like City explore) without blocking them.
+  ['smoke', 'Smoke break', 'Smoke', 'smoke', 'elevated', 160],
 ].map(([slug, label, short, pictogram, riskLevel, sortOrder]) => ({ slug, label, short, pictogram, riskLevel, sortOrder }));
 
 const LEVELS = [
-  [1, 'Newcomer', 0, 'Welcome to IRL', 'sparkle'],
+  [1, 'Newcomer', 0, 'Welcome to Come Over', 'sparkle'],
   [2, 'First Hello', 40, 'Complete your first meetup', 'chat'],
   [3, 'Regular', 100, 'Keep showing up', 'check'],
   [4, 'Explorer', 160, 'Try different kinds of plans', 'pin'],
@@ -64,10 +69,11 @@ const AREAS = [
   ['Old City', 23.025, 72.588],
 ];
 
-async function seed() {
+async function seed({ onlyMissing = false } = {}) {
   const { Category, Level, Quest, Achievement, CityArea } = require('../src/models');
+  const write = onlyMissing ? '$setOnInsert' : '$set';
   const ops = async (Model, docs, key) =>
-    (await Model.bulkWrite(docs.map((d) => ({ updateOne: { filter: key(d), update: { $set: d }, upsert: true } })))).upsertedCount;
+    (await Model.bulkWrite(docs.map((d) => ({ updateOne: { filter: key(d), update: { [write]: d }, upsert: true } })))).upsertedCount;
   const counts = {
     categories: await ops(Category, CATEGORIES, (d) => ({ slug: d.slug })),
     levels: await ops(Level, LEVELS, (d) => ({ level: d.level })),
@@ -77,7 +83,13 @@ async function seed() {
   counts.cityAreas = (
     await CityArea.bulkWrite(
       AREAS.map(([name, lat, lng]) => ({
-        updateOne: { filter: { city: 'Ahmedabad', name }, update: { $setOnInsert: { city: 'Ahmedabad', name, active: true }, $set: { centroid: { type: 'Point', coordinates: [lng, lat] } } }, upsert: true },
+        updateOne: {
+          filter: { city: 'Ahmedabad', name },
+          update: onlyMissing
+            ? { $setOnInsert: { city: 'Ahmedabad', name, active: true, centroid: { type: 'Point', coordinates: [lng, lat] } } }
+            : { $setOnInsert: { city: 'Ahmedabad', name, active: true }, $set: { centroid: { type: 'Point', coordinates: [lng, lat] } } },
+          upsert: true,
+        },
       }))
     )
   ).upsertedCount;
@@ -88,8 +100,9 @@ if (require.main === module) {
   (async () => {
     await db.connect();
     await db.syncIndexes();
-    const counts = await seed();
-    console.log(`Seed complete (newly inserted): ${JSON.stringify(counts)}`);
+    const onlyMissing = process.argv.includes('--only-missing');
+    const counts = await seed({ onlyMissing });
+    console.log(`Seed complete${onlyMissing ? ' (missing entries only)' : ''} (newly inserted): ${JSON.stringify(counts)}`);
     await db.disconnect();
   })().catch(async (e) => {
     console.error(e);

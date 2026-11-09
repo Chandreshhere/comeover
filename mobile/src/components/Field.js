@@ -1,6 +1,8 @@
 import React from 'react';
-import { Pressable, Switch, TextInput, View } from 'react-native';
-import { colors, fonts, radius, space } from '@/theme/tokens';
+import { Platform, Pressable, Switch, TextInput, View } from 'react-native';
+
+const SWITCH_OVERHANG = Platform.OS === 'ios' && (parseInt(String(Platform.Version), 10) || 0) >= 26 ? 12 : 0;
+import { colors, fonts, isDark, onInkAlpha, radius, space } from '@/theme/tokens';
 import AppText from './AppText';
 import Icon from './Icon';
 
@@ -36,6 +38,7 @@ export function TextField({ label, value, onChangeText, placeholder, helper, err
           keyboardType={keyboardType}
           autoFocus={autoFocus}
           secureTextEntry={secureTextEntry}
+          keyboardAppearance={isDark() ? 'dark' : 'light'}
           accessibilityLabel={label || placeholder}
           style={[{ flex: 1, fontFamily: fonts.regular, fontSize: 15, color: colors.ink, paddingVertical: multiline ? 0 : 12, textAlignVertical: multiline ? 'top' : 'center' }, inputStyle]}
           {...rest}
@@ -89,13 +92,18 @@ export function ListRow({ icon, iconBg = colors.surfaceSubtle, title, subtitle, 
         </AppText>
       )}
       {isSwitch ? (
-        <Switch
-          value={toggle}
-          onValueChange={onToggle}
-          trackColor={{ false: colors.track, true: colors.ink }}
-          thumbColor={colors.white}
-          accessibilityLabel={title}
-        />
+        // iOS 26 draws UISwitch 63pt wide in a 51pt box: reserve the overhang
+        // so the switch never touches the card edge.
+        <View style={{ marginRight: SWITCH_OVERHANG }}>
+          <Switch
+            value={toggle}
+            onValueChange={onToggle}
+            trackColor={{ false: colors.track, true: isDark() ? '#5B78D6' : colors.ink }}
+            thumbColor={colors.pureWhite}
+            ios_backgroundColor={colors.track}
+            accessibilityLabel={title}
+          />
+        </View>
       ) : (
         right || (onPress ? <Icon name="chevron-right" size={18} color={colors.muted} /> : null)
       )}
@@ -142,7 +150,7 @@ export function OptionCard({ title, subtitle, selected, onPress, left, style }) 
           {title}
         </AppText>
         {!!subtitle && (
-          <AppText variant="caption" color={selected ? 'rgba(255,255,255,0.7)' : colors.muted} style={{ marginTop: 2 }}>
+          <AppText variant="caption" color={selected ? onInkAlpha(0.7) : colors.muted} style={{ marginTop: 2 }}>
             {subtitle}
           </AppText>
         )}

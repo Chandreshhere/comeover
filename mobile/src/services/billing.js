@@ -94,15 +94,11 @@ export async function purchase(productId, offerToken) {
 export async function restore() {
   if (!(await initBilling())) return { entitlement: null };
   const purchases = await RNIap.getAvailablePurchases();
-  const body = {
-    store: Platform.OS === 'ios' ? 'apple' : 'google',
-    purchases: purchases.map((p) => ({
-      productId: p.productId,
-      transactionId: p.transactionId,
-      receipt: Platform.OS === 'ios' ? p.transactionReceipt : undefined,
-      purchaseToken: Platform.OS === 'android' ? p.purchaseToken : undefined,
-    })),
-  };
+  // Shape expected by POST /v1/subscriptions/restore.
+  const body =
+    Platform.OS === 'ios'
+      ? { apple: { transactionIds: purchases.map((p) => p.transactionId).filter(Boolean).slice(0, 50) } }
+      : { google: { purchaseTokens: purchases.map((p) => p.purchaseToken).filter(Boolean).slice(0, 50) } };
   return monetization.restore(body);
 }
 

@@ -1,20 +1,23 @@
-// Create step 6 — review how the plan looks, confirm the safety checklist, publish.
+// Create step 6 — one summary card (tap a line to edit), three safety checks, publish.
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
+import Animated, { ReduceMotion, ZoomIn } from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
-import { ActivityCard, AppText, Icon, ListGroup, ListRow } from '@/components';
+import { AppText, Icon, ListRow, usePressScale } from '@/components';
+import { IconBubble } from '@/components/Card';
 import { categoryBySlug } from '@/data/catalog';
 import { useAppStore } from '@/store/useAppStore';
-import { colors, layout, radius, space } from '@/theme/tokens';
+import { accents, colors, radius, space } from '@/theme/tokens';
 import { durationLabel, relativeDay, timeLabel } from '@/utils/format';
 import haptics from '@/utils/haptics';
 import StepScaffold, { FieldLabel } from './components/StepScaffold';
 import { computeStartsAt, draftToActivity, looksPrivate } from './createUtils';
 
+// Safety confirmations: all three are required before publishing.
 const CHECKS = [
-  { key: 'public', label: 'It’s in a public place', sub: 'No homes, hotel rooms or private addresses.' },
-  { key: 'inapp', label: 'I’ll coordinate in the app chat', sub: 'Keep details in IRL until you’ve met.' },
-  { key: 'tools', label: 'I know how to report, block and cancel', sub: 'Available on every plan and chat.' },
+  { key: 'public', label: 'It’s a public place, not a home' },
+  { key: 'inapp', label: 'I’ll keep chat in the app until we meet' },
+  { key: 'tools', label: 'I know how to report, block and cancel' },
 ];
 
 const AUDIENCE_LABEL = { everyone: 'Everyone nearby', circle: 'Circle members', invite_only: 'Invite only' };
@@ -31,15 +34,32 @@ const PUBLISH_ERRORS = {
   duplicate_plan: { msg: 'You already have a very similar plan live. Edit that one instead.' },
   rate_limited: { msg: 'You’ve published a lot of plans recently. Try again in a little while.' },
   account_restricted: { msg: 'Your account is limited right now, so you can’t host plans. Check the Safety center for details.' },
-  network: { msg: 'No connection. Your draft is saved — try again when you’re back online.' },
-  timeout: { msg: 'The server took too long. Your draft is saved — try again.' },
+  network: { msg: 'No connection. Your draft is saved. Try again when you’re back online.' },
+  timeout: { msg: 'The server took too long. Your draft is saved. Try again.' },
 };
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const checkPop = ZoomIn.springify().damping(14).stiffness(260).reduceMotion(ReduceMotion.System);
 
 const newClientKey = () => `create_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
-function Check({ checked, label, sub, onPress }) {
+// Checklist row (56pt): the 24pt box is centred on the label's first 22pt
+// line via a 1pt text offset, and the tick pops in with a spring.
+function Check({ checked, label, onPress, last }) {
+  const press = usePressScale(0.98);
   return (
-    <Pressable onPress={onPress} accessibilityRole="checkbox" accessibilityState={{ checked }} accessibilityLabel={label} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: space.xs, minHeight: 44 }}>
+    <AnimatedPressable
+      onPress={() => {
+        haptics.select();
+        onPress();
+      }}
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel={label}
+      style={[{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: space.md, minHeight: 56, borderBottomWidth: last ? 0 : 1, borderBottomColor: colors.border }, press.style]}
+    >
       <View
         style={{
           width: 24,
@@ -50,18 +70,18 @@ function Check({ checked, label, sub, onPress }) {
           backgroundColor: checked ? colors.ink : colors.surface,
           alignItems: 'center',
           justifyContent: 'center',
-          marginTop: 2,
         }}
       >
-        {checked && <Icon name="check" size={14} color={colors.white} />}
+        {checked && (
+          <Animated.View entering={checkPop}>
+            <Icon name="check" size={14} color={colors.white} />
+          </Animated.View>
+        )}
       </View>
-      <View style={{ flex: 1, marginLeft: space.sm }}>
-        <AppText variant="bodyStrong">{label}</AppText>
-        <AppText variant="caption" color={colors.muted}>
-          {sub}
-        </AppText>
-      </View>
-    </Pressable>
+      <AppText variant="bodyStrong" style={{ flex: 1, marginLeft: space.sm, paddingTop: 1 }}>
+        {label}
+      </AppText>
+    </AnimatedPressable>
   );
 }
 
@@ -127,69 +147,60 @@ export default function CreatePreviewScreen() {
   };
 
   const startsAt = draft.startsAt || preview.startsAt;
+  const accent = accents[(preview.accentIndex ?? 0) % accents.length];
+  const catLabel = draft.custom ? 'Custom plan' : categoryBySlug[draft.category]?.label || 'Activity';
+  const audience = draft.audience === 'circle' && circle ? circle.name : AUDIENCE_LABEL[draft.audience];
 
   return (
     <StepScaffold
       step={6}
       title="Looks good?"
-      subtitle="This is how your plan appears to people nearby."
+      subtitle="Tap any line to change it."
       onNext={publish}
       nextLabel="Publish plan"
       nextIcon="send"
       loading={loading}
       nextDisabled={!allChecked || problems.length > 0}
-      error={error || (problems.length ? `Missing: ${problems.join(', ')}` : null)}
-      hint={!allChecked ? 'Tick the safety checklist to publish' : null}
+      error={(fixRoute ? null : error) || (problems.length ? `Missing: ${problems.join(', ')}` : null)}
+      hint={!allChecked ? 'Tick the three checks to publish' : null}
     >
       {!!error && !!fixRoute && (
         <Pressable
           onPress={() => nav.navigate(fixRoute)}
           accessibilityRole="button"
           accessibilityLabel={`${error} Go back and fix it.`}
-          style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.pinkSoft, borderRadius: radius.quest, padding: space.sm, marginTop: space.md }}
+          style={{ flexDirection: 'row', alignItems: 'center', minHeight: 56, backgroundColor: colors.pinkSoft, borderRadius: radius.quest, paddingHorizontal: space.sm, marginTop: space.md }}
         >
           <Icon name="alert-circle" size={18} color={colors.danger} />
-          <AppText variant="label" style={{ flex: 1, marginLeft: space.xs }}>
+          <AppText variant="label" style={{ flex: 1, marginHorizontal: space.xs }}>
             {error}
           </AppText>
           <AppText variant="label" color={colors.deep}>
             Fix
           </AppText>
+          <Icon name="chevron-right" size={14} color={colors.deep} />
         </Pressable>
       )}
 
-      <View style={{ backgroundColor: colors.periwinkle, borderRadius: radius.hero, padding: space.md, marginTop: space.lg }}>
-        <AppText variant="label" color={colors.inkSoft} style={{ marginBottom: space.sm }}>
-          In Discover
-        </AppText>
-        <View style={{ flexDirection: 'row', gap: space.sm }}>
-          <ActivityCard activity={preview} variant="tile" width={168} />
-          <View style={{ flex: 1, justifyContent: 'center' }}>
-            <AppText variant="caption" color={colors.inkSoft}>
-              Category
+      {/* Summary card */}
+      <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, paddingHorizontal: space.md, marginTop: space.lg }}>
+        <Pressable
+          onPress={() => nav.navigate('create_activity_details')}
+          accessibilityRole="button"
+          accessibilityLabel={`${preview.title}. ${catLabel}. Edit details`}
+          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.md, borderBottomWidth: 1, borderBottomColor: colors.border }}
+        >
+          <IconBubble size={48} shape="squircle" bg={accent.bg} duo={colors.surface} pictogram={preview.pictogram} iconSize={26} />
+          <View style={{ flex: 1, marginLeft: space.sm }}>
+            <AppText variant="h3" numberOfLines={2}>
+              {preview.title}
             </AppText>
-            <AppText variant="bodyStrong">{draft.custom ? 'Custom plan' : categoryBySlug[draft.category]?.label}</AppText>
-            <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.xs }}>
-              Host
-            </AppText>
-            <AppText variant="bodyStrong">{profile.name || 'You'}</AppText>
-            <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.xs }}>
-              Visible to
-            </AppText>
-            <AppText variant="bodyStrong" numberOfLines={2}>
-              {draft.audience === 'circle' && circle ? circle.name : AUDIENCE_LABEL[draft.audience]}
+            <AppText variant="caption" color={colors.muted} numberOfLines={2} style={{ marginTop: 2 }}>
+              {draft.description || `${catLabel} · hosted by you`}
             </AppText>
           </View>
-        </View>
-        <AppText variant="label" color={colors.inkSoft} style={{ marginTop: space.md, marginBottom: space.sm }}>
-          In lists
-        </AppText>
-        <ActivityCard activity={preview} variant="row" />
-      </View>
-
-      <FieldLabel>Summary</FieldLabel>
-      <ListGroup>
-        <ListRow icon="activity" title={preview.title} subtitle={draft.description || 'No description yet'} onPress={() => nav.navigate('create_activity_details')} />
+          <Icon name="chevron-right" size={18} color={colors.muted} style={{ marginLeft: space.xs }} />
+        </Pressable>
         <ListRow
           icon="clock"
           title={['now', 'in15'].includes(draft.when) ? (draft.when === 'now' ? 'Starting now' : 'In 15 minutes') : `${relativeDay(startsAt)} · ${timeLabel(startsAt)}`}
@@ -199,26 +210,25 @@ export default function CreatePreviewScreen() {
         <ListRow icon="map-pin" title={`${draft.venueType} · ${draft.area}`} subtitle={draft.venueName || 'Exact spot shared after you accept people'} onPress={() => nav.navigate('create_activity_place')} />
         <ListRow
           icon="users"
-          title={`Up to ${draft.capacity} people · ${draft.joinRule === 'approval' ? 'You approve' : 'Instant join'}`}
-          subtitle={[draft.level && draft.level !== 'any' ? draft.level : 'Any level', draft.ageRange].filter(Boolean).join(' · ')}
+          title={`Up to ${draft.capacity} · ${draft.joinRule === 'approval' ? 'You approve' : 'Instant join'}`}
+          subtitle={[audience, draft.level && draft.level !== 'any' ? draft.level : null, draft.ageRange].filter(Boolean).join(' · ')}
           onPress={() => nav.navigate('create_activity_group')}
         />
-        <ListRow icon="credit-card" title={draft.cost || 'Free'} subtitle={(draft.tags || []).join(' · ') || 'No tags'} onPress={() => nav.navigate('create_activity_details')} last={!draft.accessibility} />
-        {!!draft.accessibility && <ListRow icon="info" title="Accessibility" subtitle={draft.accessibility} onPress={() => nav.navigate('create_activity_details')} last />}
-      </ListGroup>
-
-      <FieldLabel>Safety checklist</FieldLabel>
-      <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, paddingHorizontal: space.md, paddingVertical: space.xs }}>
-        {CHECKS.map((c) => (
-          <Check key={c.key} label={c.label} sub={c.sub} checked={!!checks[c.key]} onPress={() => setChecks((s) => ({ ...s, [c.key]: !s[c.key] }))} />
-        ))}
+        <ListRow
+          icon="dollar-sign"
+          title={draft.cost || 'Free'}
+          subtitle={[(draft.tags || []).join(' · '), draft.accessibility ? 'Accessibility notes' : null].filter(Boolean).join(' · ') || null}
+          onPress={() => nav.navigate('create_activity_details')}
+          last
+        />
       </View>
 
-      <View style={{ flexDirection: 'row', marginTop: space.md, paddingHorizontal: layout.screenPadding / 4 }}>
-        <Icon name="shield" size={14} color={colors.muted} style={{ marginTop: 2 }} />
-        <AppText variant="caption" color={colors.muted} style={{ flex: 1, marginLeft: 6 }}>
-          Plans are reviewed automatically for spam and unsafe locations. Hosting never costs money, and nobody can be paid to attend.
-        </AppText>
+      {/* Safety confirmations */}
+      <FieldLabel>Before you publish</FieldLabel>
+      <View style={{ backgroundColor: colors.surface, borderRadius: radius.card, paddingHorizontal: space.md }}>
+        {CHECKS.map((c, i) => (
+          <Check key={c.key} label={c.label} checked={!!checks[c.key]} last={i === CHECKS.length - 1} onPress={() => setChecks((s) => ({ ...s, [c.key]: !s[c.key] }))} />
+        ))}
       </View>
     </StepScaffold>
   );

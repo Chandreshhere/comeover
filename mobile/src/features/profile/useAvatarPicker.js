@@ -42,7 +42,7 @@ export default function useAvatarPicker(initial = {}) {
         e.code === 'file_too_large'
           ? 'That photo is over 5 MB. Try a smaller one.'
           : e.code === 'network' || e.code === 'timeout'
-          ? 'No connection — photo not uploaded. Try again.'
+          ? 'No connection. Photo not uploaded. Try again.'
           : e.message || 'Photo upload failed. Try again.'
       );
       return null;

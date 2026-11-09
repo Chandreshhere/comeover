@@ -4,6 +4,7 @@
 // present.activity(doc, viewer, ctx) — see below; ctx is built by services/activities.hydrate().
 const geo = require('./geo');
 const media = require('./media');
+const { isStyle } = require('./socialMatch');
 
 function accentIndex(id) {
   let h = 0;
@@ -17,6 +18,9 @@ const round2 = (n) => (n == null ? null : Math.round(Number(n) * 100) / 100);
 const publicReliability = (n) => (n == null ? null : Math.round(Number(n) * 20) / 20);
 
 const avatarUrl = (key) => media.publicUrl(key, 3600);
+// Self-described social energy ('introvert'|'ambivert'|'extrovert') or null. Shown to
+// other members (it is how matches are explained); used for ranking, never for hiding.
+const socialStyleOf = (p) => (p && isStyle(p.socialStyle) ? p.socialStyle : null);
 
 // Category doc → { slug, label, short, pictogram, riskLevel }
 const category = (c) => ({ slug: c.slug, label: c.label, short: c.short || c.label, pictogram: c.pictogram || 'sparkle', riskLevel: c.riskLevel || 'standard' });
@@ -35,6 +39,10 @@ async function publicUser(u, { distanceM, completed, area } = {}) {
     reliability: publicReliability(p.reliabilityScore),
     level: (u.progress && u.progress.level) || 1,
     interests: p.interests || [],
+    socialStyle: socialStyleOf(p),
+    // Chosen illustrated avatar ("v1.<vibe>.…"), so others see it too. Null when
+    // the user never picked one or the query didn't load preferences.
+    avatarSeed: (u.preferences && typeof u.preferences.avatarSeed === 'string' && u.preferences.avatarSeed) || null,
     availability: !av.status || availExpired ? 'busy' : av.status,
     intent: (av.activitySlugs && av.activitySlugs[0]) || null,
     completed: completed || 0,
@@ -192,6 +200,7 @@ function activity(a, viewer, ctx = {}) {
       completed: ctx.hostCompleted || 0,
       level: (host && host.progress && host.progress.level) || 1,
       avatarKey: hp.avatarKey || null,
+      socialStyle: socialStyleOf(hp),
     },
     area: a.coarseArea || null,
     venueName: canSeeVenue ? a.venueName || null : null,
@@ -241,4 +250,4 @@ function subscription(ents, sub) {
   };
 }
 
-module.exports = { accentIndex, idOf, round2, publicReliability, avatarUrl, category, publicUser, conversation, message, circle, quest, expense, notification, subscription, activity, isLive, IN_GROUP_STATES };
+module.exports = { accentIndex, idOf, round2, publicReliability, avatarUrl, socialStyleOf, category, publicUser, conversation, message, circle, quest, expense, notification, subscription, activity, isLive, IN_GROUP_STATES };

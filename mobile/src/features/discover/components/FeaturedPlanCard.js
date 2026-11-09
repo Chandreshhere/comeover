@@ -1,50 +1,73 @@
 import React from 'react';
 import { View } from 'react-native';
-import { AppText, AvatarStack, HeroCard, JoinButton, Pictogram, ProgressRing, Tag } from '@/components';
-import { colors, space } from '@/theme/tokens';
+import { AppText, AvatarStack, HeroCard, Icon, JoinButton, Pictogram } from '@/components';
+import { colors, glass, space } from '@/theme/tokens';
 import { coarseDistance, whenLabel } from '@/utils/format';
 
-// The periwinkle hero card from the reference's middle phone ("UX Lab" card),
-// translated to a featured live plan near the user.
+function Meta({ icon, text }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <Icon name={icon} size={14} color={colors.inkSoft} />
+      <AppText variant="label" color={colors.inkSoft} style={{ marginLeft: 4 }} numberOfLines={1}>
+        {text}
+      </AppText>
+    </View>
+  );
+}
+
+// The one big plan on Home. Calm and scannable: what it is, when and how far,
+// who's hosting and who's going, one button. Flat brand fill, no decoration
+// competing with the text.
 export default function FeaturedPlanCard({ activity: a, joinState = 'idle', onPress, onJoin }) {
   if (!a) return null;
   const dist = a.distanceM != null ? coarseDistance(a.distanceM) : null;
   const rel = a.host?.reliability != null ? `${Math.round(a.host.reliability * 100)}% show-up` : null;
+  const spots = a.capacity ? `${a.joinedCount}/${a.capacity} going` : null;
+  const eyebrow = [a.live ? 'Live now' : 'Featured near you', a.sponsored ? 'Sponsored' : null, a.venueType].filter(Boolean).join(' · ');
   return (
-    <HeroCard onPress={onPress} accessibilityLabel={`Featured plan: ${a.title}, ${whenLabel(a.startsAt)}${dist ? `, ${dist} away` : ''}`} style={{ minHeight: 200 }}>
-      {/* decorative pictograms, bottom-right */}
-      <View pointerEvents="none" style={{ position: 'absolute', right: 14, bottom: 14, opacity: 0.35, transform: [{ rotate: '-12deg' }] }}>
-        <Pictogram name={a.pictogram} size={78} strokeWidth={1.4} />
-      </View>
-      <View pointerEvents="none" style={{ position: 'absolute', right: 96, bottom: 62, opacity: 0.35 }}>
-        <Pictogram name="sparkle" size={22} strokeWidth={1.6} />
-      </View>
-
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' }}>
-          <Pictogram name={a.pictogram} size={24} />
+    <HeroCard onPress={onPress} accessibilityLabel={`Featured plan: ${a.title}, ${whenLabel(a.startsAt)}${dist ? `, ${dist} away` : ''}`}>
+      {/* eyebrow: activity + context, spots on the right */}
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+          <Pictogram name={a.pictogram} size={20} duotoneColor={colors.deep} duotoneOpacity={0.4} />
         </View>
-        <ProgressRing value={a.capacity ? a.joinedCount / a.capacity : 0} size={46} label={`${a.joinedCount}/${a.capacity}`} track="rgba(9,10,14,0.18)" />
+        <AppText variant="label" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.xs }} numberOfLines={1}>
+          {eyebrow}
+        </AppText>
+        {spots && (
+          <View style={{ height: 28, paddingHorizontal: 10, borderRadius: 14, backgroundColor: glass(0.6), flexDirection: 'row', alignItems: 'center', marginLeft: space.xs }}>
+            <Icon name="users" size={13} color={colors.ink} />
+            <AppText variant="label" style={{ marginLeft: 4 }}>
+              {spots}
+            </AppText>
+          </View>
+        )}
       </View>
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.md, gap: 6 }}>
-        {a.live && <Tag label="Live now" icon="radio" bg={colors.ink} fg={colors.white} />}
-        {a.sponsored && <Tag label="Sponsored" bg={colors.white} />}
-        {!!a.venueType && <Tag label={a.venueType} bg="rgba(255,255,255,0.55)" />}
-      </View>
-      <AppText variant="h2" style={{ marginTop: space.xs }} numberOfLines={2}>
+      <AppText variant="h2" style={{ marginTop: space.md }} numberOfLines={2}>
         {a.title}
       </AppText>
-      <AppText variant="label" color={colors.inkSoft} style={{ marginTop: 2 }}>
-        {[whenLabel(a.startsAt), dist, `${a.joinedCount}/${a.capacity} joined`].filter(Boolean).join(' · ')}
-      </AppText>
-      <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 2 }}>
-        {[`Hosted by ${a.host?.name || 'a member'}`, rel].filter(Boolean).join(' · ')}
-      </AppText>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: space.md, rowGap: 4, marginTop: 6 }}>
+        <Meta icon="clock" text={whenLabel(a.startsAt)} />
+        {dist && <Meta icon="map-pin" text={dist} />}
+      </View>
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: space.md }}>
+      {/* host + action */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.lg }}>
         <JoinButton state={joinState} onPress={onJoin} size="md" idleLabel={a.joinRule === 'approval' ? 'Request' : 'Join now'} />
-        <AvatarStack seeds={a.participants || []} size={30} max={3} ringColor={colors.periwinkle} />
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginLeft: space.sm }}>
+          <View style={{ flexShrink: 1, alignItems: 'flex-end', marginRight: space.xs }}>
+            <AppText variant="label" numberOfLines={1}>
+              {a.host?.name || 'A member'}
+            </AppText>
+            {!!rel && (
+              <AppText variant="caption" color={colors.inkSoft} numberOfLines={1}>
+                {rel}
+              </AppText>
+            )}
+          </View>
+          <AvatarStack seeds={a.participants || []} size={30} max={3} ringColor={colors.periwinkle} />
+        </View>
       </View>
     </HeroCard>
   );

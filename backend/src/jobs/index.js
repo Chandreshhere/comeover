@@ -44,7 +44,7 @@ async function retention() {
     );
     await User.updateOne(
       { _id: id, profile: { $ne: null } },
-      { $set: { 'profile.displayName': 'Deleted user', 'profile.bio': null, 'profile.avatarKey': null, 'profile.interests': [], 'profile.intents': [], 'profile.boundaries': null, 'profile.preferences': {} } }
+      { $set: { 'profile.displayName': 'Deleted user', 'profile.bio': null, 'profile.avatarKey': null, 'profile.interests': [], 'profile.intents': [], 'profile.boundaries': null, 'profile.socialStyle': null, 'profile.preferences': {} } }
     );
     await TrustedContact.deleteMany({ userId: id });
     await Notification.deleteMany({ userId: id });

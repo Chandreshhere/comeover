@@ -14,7 +14,7 @@ module.exports = {
   globals: { __DEV__: 'readonly', fetch: 'readonly', FormData: 'readonly', requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly', WebSocket: 'readonly', AbortController: 'readonly', Blob: 'readonly' },
   plugins: ['react', 'react-hooks'],
   settings: { react: { version: '18.3' } },
-  ignorePatterns: ['android/', 'ios/', 'node_modules/'],
+  ignorePatterns: ['android/', 'ios/', 'node_modules/', '**/._*'],
   rules: {
     'no-undef': 'error',
     'react/jsx-no-undef': 'error',

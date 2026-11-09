@@ -232,10 +232,10 @@ const routes = {
       const expiresAt = new Date(new Date(a.endsAt).getTime() + 6 * 3600000);
       await PlanShare.create({ userId: user.id, activityId: a._id, trustedContactId: contact._id, shareToken: token, expiresAt });
       const where = a.venueName ? `${a.venueName}, ${a.coarseArea || ''}`.replace(/, $/, '') : a.coarseArea || 'a public place';
-      sms = await sendSms(phone, `${who} shared a plan with you via Project IRL: "${a.title}" ${istLabel(a.startsAt)} at ${where} (host: ${hostName}). If you are ever worried, call 112.`, { templateKey: 'plan_share' });
+      sms = await sendSms(phone, `${who} shared a plan with you via Come Over: "${a.title}" ${istLabel(a.startsAt)} at ${where} (host: ${hostName}). If you are ever worried, call 112.`, { templateKey: 'plan_share' });
       shared = { activityId: a._id, expiresAt: a.endsAt };
     } else {
-      sms = await sendSms(phone, `${who} added you as a trusted contact on Project IRL. You may receive plan details from them. Reply STOP to opt out.`, { templateKey: 'trusted_invite' });
+      sms = await sendSms(phone, `${who} added you as a trusted contact on Come Over. You may receive plan details from them. Reply STOP to opt out.`, { templateKey: 'trusted_invite' });
     }
     await audit({ actorUserId: user.id, action: 'trusted_contact.invite', targetType: 'trusted_contact', targetId: contact._id, metadata: { sharedActivity: v.activityId || null, smsSent: !!sms.sent }, ip: req.ip });
     return created({ id: contact._id, name: contact.name, phone: contact.phone, status: contact.status, createdAt: contact.createdAt, shared, smsSent: !!sms.sent });

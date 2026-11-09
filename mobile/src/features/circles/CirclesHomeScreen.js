@@ -1,9 +1,10 @@
 // circles_home (tab) — joined, suggested and local circles from GET /circles?tab=…
+// One job: find a circle. Header holds the single "Create" action.
 import React, { useMemo, useState } from 'react';
 import { Alert, RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Button, HeroCard, IconButton, Pictogram, QueryState, Screen, SearchBar, Segmented } from '@/components';
+import { AppText, Button, QueryState, Screen, SearchBar, Segmented } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
 import { colors, space } from '@/theme/tokens';
@@ -16,6 +17,14 @@ const TABS = [
   { value: 'suggested', label: 'Suggested' },
   { value: 'local', label: 'Local' },
 ];
+
+// One helper line under the tabs so each tab explains itself.
+const tabHint = (tab, area) =>
+  ({
+    joined: 'Circles you’re part of',
+    suggested: 'Picked for your interests',
+    local: `Meeting around ${area || 'you'}`,
+  }[tab]);
 
 export default function CirclesHomeScreen() {
   const nav = useNavigation();
@@ -61,32 +70,36 @@ export default function CirclesHomeScreen() {
     }
   };
 
+  const create = () => nav.navigate('circle_create');
   const emptyProps = q
-    ? { title: 'No circles match', body: `Nothing for “${q}” yet. Start it — someone nearby is looking for the same thing.`, cta: 'Create a circle', onCta: () => nav.navigate('circle_create') }
+    ? { title: 'No circles match', body: `Nothing for “${q}” yet. Start one?`, cta: 'Create a circle', onCta: create }
     : tab === 'joined'
-    ? { title: 'No circles yet', body: 'Circles are recurring groups — runners, chai regulars, board-game nights.', cta: 'See suggestions', onCta: () => setTab('suggested') }
-    : { title: tab === 'local' ? `No circles in ${area || 'your area'} yet` : 'No suggestions right now', body: 'Start one for something you love — others nearby can join.', cta: 'Create a circle', onCta: () => nav.navigate('circle_create') };
+    ? { title: 'No circles yet', body: 'Join one and it shows up here.', cta: 'See suggestions', onCta: () => setTab('suggested') }
+    : { title: tab === 'local' ? `None in ${area || 'your area'} yet` : 'No suggestions right now', body: 'Start one for something you love.', cta: 'Create a circle', onCta: create };
 
   return (
     <Screen bg={colors.canvas} tabBarSpace keyboard refreshControl={<RefreshControl refreshing={load.refreshing} onRefresh={load.reload} tintColor={colors.ink} />}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm }}>
-        <View style={{ flex: 1 }}>
-          <AppText variant="h1" accessibilityRole="header">
+      {/* Tab-root header: large title left, the one Create action right */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm, minHeight: 56 }}>
+        <View style={{ flex: 1, marginRight: space.sm }}>
+          <AppText variant="h1" accessibilityRole="header" numberOfLines={1}>
             Circles
           </AppText>
-          <AppText variant="caption" color={colors.muted}>
-            Recurring groups{area ? ` around ${area}` : ' near you'}
+          <AppText variant="caption" color={colors.muted} numberOfLines={1}>
+            Groups that meet again and again
           </AppText>
         </View>
-        <IconButton icon="message-circle" accessibilityLabel="Inbox" onPress={() => nav.navigate('inbox')} style={{ marginRight: space.xs }} />
-        <IconButton icon="plus" variant="ink" accessibilityLabel="Create a circle" onPress={() => nav.navigate('circle_create')} />
+        <Button title="New circle" icon="plus" size="sm" full={false} onPress={create} accessibilityLabel="Create a circle" />
       </View>
 
-      <SearchBar placeholder="Search circles" value={q} onChangeText={setQ} style={{ marginTop: space.md }} />
-      <Segmented options={TABS} value={tab} onChange={setTab} style={{ marginTop: space.sm }} />
+      <Segmented options={TABS} value={tab} onChange={setTab} style={{ marginTop: space.md }} />
+      <SearchBar placeholder="Search circles" value={q} onChangeText={setQ} style={{ marginTop: space.sm }} />
+      <AppText variant="caption" color={colors.muted} style={{ marginTop: space.md }} numberOfLines={1}>
+        {tabHint(tab, area)}
+      </AppText>
 
-      <QueryState status={load.status} error={load.error} hasData={list.length > 0} onRetry={load.reload} empty={emptyProps} style={{ marginTop: space.md }}>
-        <View style={{ gap: space.sm, marginTop: space.md }}>
+      <QueryState status={load.status} error={load.error} hasData={list.length > 0} onRetry={load.reload} empty={emptyProps} style={{ marginTop: space.xs }}>
+        <View style={{ gap: space.sm, marginTop: space.xs }}>
           {list.map((c, i) => {
             const joined = joinedCircles.includes(c.id);
             return (
@@ -109,21 +122,6 @@ export default function CirclesHomeScreen() {
           Couldn't refresh circles. Pull down to try again.
         </AppText>
       )}
-
-      <HeroCard style={{ marginTop: space.xl }} onPress={() => nav.navigate('circle_create')} accessibilityLabel="Start your own circle">
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <View style={{ flex: 1 }}>
-            <AppText variant="h2">Start your own circle</AppText>
-            <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 4 }}>
-              Turn a one-off plan into a weekly thing. You set the rules.
-            </AppText>
-            <Button title="Create circle" size="sm" full={false} style={{ marginTop: space.md }} onPress={() => nav.navigate('circle_create')} />
-          </View>
-          <View style={{ width: 84, height: 84, borderRadius: 42, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center', marginLeft: space.sm }}>
-            <Pictogram name="people" size={44} />
-          </View>
-        </View>
-      </HeroCard>
     </Screen>
   );
 }

@@ -5,10 +5,13 @@ import { useNavigation } from '@react-navigation/native';
 import { AppText, Button, IconButton, ProgressBar, Screen } from '@/components';
 import { colors, layout, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
+import Disclosure from '@/features/plans/components/Disclosure';
 import { STEPS } from '../createUtils';
 
-// Shared chrome for the 6-step create flow: back, "Step n of 6", progress,
-// "Save & exit" (the draft is persisted in the store) and a sticky Next CTA.
+// Shared chrome for the 6-step create flow: back/close, "Step n of 6",
+// "Save & exit" (the draft is persisted in the store), a thin progress bar,
+// one question (title + one helper line) and a sticky Next CTA. The left and
+// right header slots share the same flex so the step label stays truly centred.
 export default function StepScaffold({ step, title, subtitle, children, onNext, nextLabel = 'Next', nextIcon = 'arrow-right', nextDisabled, loading, hint, error }) {
   const nav = useNavigation();
   const total = STEPS.length;
@@ -19,19 +22,21 @@ export default function StepScaffold({ step, title, subtitle, children, onNext, 
       header={
         <View style={{ paddingHorizontal: layout.screenPadding, paddingTop: space.xs }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 52 }}>
-            <IconButton icon={step === 1 ? 'x' : 'arrow-left'} accessibilityLabel={step === 1 ? 'Close' : 'Previous step'} onPress={() => (nav.canGoBack() ? nav.goBack() : nav.navigate('main'))} />
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <AppText variant="label" color={colors.muted}>
-                Step {step} of {total}
-              </AppText>
+            <View style={{ flex: 1, alignItems: 'flex-start' }}>
+              <IconButton icon={step === 1 ? 'x' : 'arrow-left'} accessibilityLabel={step === 1 ? 'Close' : 'Previous step'} onPress={() => (nav.canGoBack() ? nav.goBack() : nav.navigate('main'))} />
             </View>
-            <Pressable onPress={() => nav.navigate('main')} accessibilityRole="button" accessibilityLabel="Save draft and exit" hitSlop={10} style={{ minHeight: 44, justifyContent: 'center' }}>
-              <AppText variant="label" color={colors.deep}>
-                Save & exit
-              </AppText>
-            </Pressable>
+            <AppText variant="label" color={colors.muted} numberOfLines={1} accessibilityElementsHidden importantForAccessibility="no">
+              Step {step} of {total}
+            </AppText>
+            <View style={{ flex: 1, alignItems: 'flex-end' }}>
+              <Pressable onPress={() => nav.navigate('main')} accessibilityRole="button" accessibilityLabel="Save draft and exit" hitSlop={10} style={{ minHeight: layout.minTouch, justifyContent: 'center' }}>
+                <AppText variant="label" color={colors.deep} numberOfLines={1}>
+                  Save & exit
+                </AppText>
+              </Pressable>
+            </View>
           </View>
-          <ProgressBar value={step / total} style={{ marginTop: space.xs }} accessibilityLabel={`Step ${step} of ${total}`} />
+          <ProgressBar value={step / total} height={4} style={{ marginTop: space.xs }} accessibilityLabel={`Step ${step} of ${total}`} />
         </View>
       }
       footer={
@@ -60,10 +65,29 @@ export default function StepScaffold({ step, title, subtitle, children, onNext, 
   );
 }
 
-export function FieldLabel({ children, style }) {
+// Group label above a block of options.
+export function FieldLabel({ children, right, style }) {
   return (
-    <AppText variant="h3" style={[{ marginTop: space.xl, marginBottom: space.sm }, style]}>
+    <View style={[{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: space.xl, marginBottom: space.sm }, style]}>
+      <AppText variant="h3" accessibilityRole="header" style={{ flexShrink: 1 }}>
+        {children}
+      </AppText>
+      {typeof right === 'string' ? (
+        <AppText variant="caption" color={colors.muted} style={{ marginLeft: space.xs }}>
+          {right}
+        </AppText>
+      ) : (
+        right || null
+      )}
+    </View>
+  );
+}
+
+// Optional settings, collapsed by default so each step asks one question.
+export function MoreOptions({ title = 'More options', subtitle, initiallyOpen, children }) {
+  return (
+    <Disclosure icon="sliders" title={title} subtitle={subtitle} initiallyOpen={initiallyOpen} style={{ marginTop: space.xl }}>
       {children}
-    </AppText>
+    </Disclosure>
   );
 }

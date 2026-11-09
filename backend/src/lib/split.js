@@ -69,7 +69,7 @@ function upiLink({ vpa, payeeName, amountMinor, note }) {
   if (!vpa || !FORMATS.vpa.test(vpa)) return null;
   const params = new URLSearchParams({
     pa: vpa,
-    pn: (payeeName || 'IRL friend').slice(0, 40),
+    pn: (payeeName || 'Come Over friend').slice(0, 40),
     am: (amountMinor / 100).toFixed(2),
     cu: 'INR',
     tn: (note || 'SplitMate').slice(0, 60),

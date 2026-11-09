@@ -1,13 +1,16 @@
 // location_permission — OS permission states: checking, ask, granted, denied,
 // blocked (settings), unavailable. Progress is never blocked.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Platform, View } from 'react-native';
+import { ActivityIndicator, AppState, Platform, View } from 'react-native';
 import { PERMISSIONS, RESULTS, check, openSettings, request } from 'react-native-permissions';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Button, Icon } from '@/components';
+import { GpsSlash } from 'phosphor-react-native/src/icons/GpsSlash';
+import { MapPinArea } from 'phosphor-react-native/src/icons/MapPinArea';
+import { AppText, Button } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import { getCoarsePosition } from '@/services/location';
 import { colors, radius, space } from '@/theme/tokens';
+import IconBubble, { toneOf } from '@/features/system/IconBubble';
 import OnboardingFrame from './components/OnboardingFrame';
 import AreaPickerSheet from './components/AreaPickerSheet';
 
@@ -16,13 +19,15 @@ const PERM = Platform.select({
   android: PERMISSIONS.ANDROID.ACCESS_COARSE_LOCATION,
 });
 
+// Each permission state is one short title + one line. Bubble tones are names
+// (resolved at render), so the copy table holds no colours.
 const COPY = {
-  checking: { icon: 'loader', tone: colors.surfaceSubtle, title: 'Checking permission…', body: '' },
-  ask: { icon: 'navigation', tone: colors.periwinkleWash, title: 'Allow location while using the app', body: "Your phone will ask next. Choose \"While using the app\" — that's all we need." },
-  granted: { icon: 'check', tone: colors.mint, title: 'Location is on', body: 'We’ll show plans around you. Others only ever see your area.' },
-  denied: { icon: 'x', tone: colors.pinkSoft, title: 'Location not allowed', body: 'No problem — pick your area by hand. You can enable it later in Settings.' },
-  blocked: { icon: 'settings', tone: colors.orangeSoft, title: 'Location is turned off in Settings', body: 'Enable it in your phone settings, or just choose your area manually.' },
-  unavailable: { icon: 'map', tone: colors.surfaceSubtle, title: 'Location unavailable on this device', body: 'Choose your area manually instead.' },
+  checking: { icon: null, tone: 'neutral', title: 'Checking…', body: 'One moment.' },
+  ask: { icon: 'navigation', tone: 'periwinkle', title: 'Allow location?', body: 'Choose "While using the app". That\'s all we need.' },
+  granted: { icon: 'check-circle', tone: 'mint', title: 'Location is on', body: 'Others only ever see your area.' },
+  denied: { icon: GpsSlash, tone: 'pink', title: 'No problem', body: 'Pick your area by hand. You can turn location on later.' },
+  blocked: { icon: 'settings', tone: 'orange', title: 'Location is off', body: 'Turn it on in Settings, or pick your area by hand.' },
+  unavailable: { icon: GpsSlash, tone: 'neutral', title: 'Location unavailable', body: 'Pick your area by hand instead.' },
 };
 
 export default function LocationPermissionScreen() {
@@ -100,6 +105,8 @@ export default function LocationPermissionScreen() {
 
   const c = COPY[state];
 
+  // One primary action per state, at most one quiet secondary. Picking an area
+  // by hand is always available from the "Your area" row.
   let footer;
   if (state === 'granted') {
     footer = <Button title="Continue" onPress={next} loading={locating} />;
@@ -107,58 +114,61 @@ export default function LocationPermissionScreen() {
     footer = (
       <View>
         <Button title="Allow location" icon="navigation" onPress={ask} loading={busy} />
-        <Button title="Skip for now" variant="ghost" style={{ marginTop: space.xs }} onPress={next} />
+        <Button title="Not now" variant="ghost" style={{ marginTop: space.xs }} onPress={next} />
       </View>
     );
   } else if (state === 'blocked') {
     footer = (
       <View>
         <Button title="Open Settings" icon="settings" onPress={() => openSettings().catch(() => {})} />
-        <Button title="Choose area manually" variant="secondary" style={{ marginTop: space.xs }} onPress={() => setPicker(true)} />
+        <Button title="Continue without it" variant="ghost" style={{ marginTop: space.xs }} onPress={next} />
       </View>
     );
   } else {
     footer = (
       <View>
-        <Button title="Choose area manually" onPress={() => setPicker(true)} disabled={state === 'checking'} />
+        <Button title="Continue" onPress={next} disabled={state === 'checking'} />
         {state === 'denied' && <Button title="Try again" variant="ghost" style={{ marginTop: space.xs }} onPress={ask} />}
-        {state !== 'checking' && <Button title="Skip for now" variant="ghost" style={{ marginTop: space.xs }} onPress={next} />}
       </View>
     );
   }
 
   return (
-    <OnboardingFrame stepId="location_permission" title="Location" subtitle="Approximate location, only while the app is open." footer={footer}>
+    <OnboardingFrame
+      stepId="location_permission"
+      hero={
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={{ height: 160, backgroundColor: colors.surface, borderRadius: radius.hero, alignItems: 'center', justifyContent: 'center' }}
+        >
+          {c.icon ? (
+            <IconBubble icon={c.icon} tone={c.tone} size={88} iconSize={42} />
+          ) : (
+            <View style={{ width: 88, height: 88, borderRadius: 44, backgroundColor: toneOf(c.tone).bg, alignItems: 'center', justifyContent: 'center' }}>
+              <ActivityIndicator color={colors.ink} />
+            </View>
+          )}
+        </View>
+      }
+      title={c.title}
+      subtitle={c.body}
+      footer={footer}
+    >
       <View
         accessibilityLiveRegion="polite"
-        style={{ backgroundColor: colors.surface, borderRadius: radius.card, padding: space.lg, alignItems: 'center' }}
+        style={{ flexDirection: 'row', alignItems: 'center', minHeight: 64, backgroundColor: colors.surface, borderRadius: radius.card, paddingVertical: space.sm, paddingLeft: space.md, paddingRight: space.xs }}
       >
-        <View style={{ width: 84, height: 84, borderRadius: 42, backgroundColor: c.tone, alignItems: 'center', justifyContent: 'center' }}>
-          <Icon name={c.icon} size={34} color={colors.ink} />
+        <IconBubble icon={MapPinArea} tone="lavender" size={40} iconSize={20} />
+        <View style={{ flex: 1, marginHorizontal: space.sm }}>
+          <AppText variant="caption" color={colors.muted}>
+            Your area
+          </AppText>
+          <AppText variant="bodyStrong" numberOfLines={1}>
+            {area || (locating ? 'Finding your area…' : 'Not set yet')}
+          </AppText>
         </View>
-        <AppText variant="h2" align="center" style={{ marginTop: space.md }}>
-          {c.title}
-        </AppText>
-        {!!c.body && (
-          <AppText color={colors.muted} align="center" style={{ marginTop: space.xs }}>
-            {c.body}
-          </AppText>
-        )}
-        {state === 'granted' && locating && (
-          <AppText variant="caption" color={colors.muted} style={{ marginTop: space.sm }}>
-            Finding your area…
-          </AppText>
-        )}
-      </View>
-
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.md, backgroundColor: colors.surface, borderRadius: radius.quest, padding: space.md }}>
-        <Icon name="map-pin" size={16} />
-        <AppText variant="label" style={{ flex: 1, marginLeft: space.xs }}>
-          Your area: {area || 'not set'}
-        </AppText>
-        <AppText variant="label" color={colors.deep} onPress={() => setPicker(true)} accessibilityRole="button" suppressHighlighting>
-          Change
-        </AppText>
+        <Button title={area ? 'Change' : 'Choose'} size="sm" variant="ghost" full={false} onPress={() => setPicker(true)} accessibilityLabel={area ? 'Change your area' : 'Choose your area'} />
       </View>
 
       <AreaPickerSheet

@@ -1,4 +1,4 @@
-// Phone OTP sign-in via the Project IRL API, which uses Slide
+// Phone OTP sign-in via the Come Over API, which uses Slide
 // (https://slide.synquic.com) to deliver codes over WhatsApp or SMS.
 // The Slide API key lives only on the server; the app sees a requestId.
 //

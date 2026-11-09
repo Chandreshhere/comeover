@@ -18,6 +18,7 @@ import { colors, radius } from '@/theme/tokens';
 import { durations, spring } from '@/theme/motion';
 import { useAppStore } from '@/store/useAppStore';
 import haptics from '@/utils/haptics';
+import sfx from '@/services/sfx';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const CHECK_LEN = 30;
@@ -25,11 +26,11 @@ const CHECK_LEN = 30;
 export function questRowProps(q) {
   switch (q.state) {
     case 'completed':
-      return { subtitle: 'Done! Tap to claim your XP', xp: q.xp };
+      return { subtitle: 'Done! Tap to claim', xp: q.xp };
     case 'claimed':
       return { subtitle: `Claimed · +${q.xp} XP`, done: true };
     case 'expired':
-      return { subtitle: 'Expired — fresh quests arrive tomorrow', locked: true };
+      return { subtitle: 'Expired · new ones tomorrow', locked: true };
     default:
       return { subtitle: q.subtitle, progress: q.progress, total: q.total };
   }
@@ -71,7 +72,10 @@ export default function AnimatedQuestCard({ quest, tone = 'dark', highlighted = 
     try {
       // Server-authoritative: XP comes from POST /quests/{id}/claim.
       const xp = await claimQuest(quest.id);
-      if (xp) haptics.success();
+      if (xp) {
+        haptics.success();
+        sfx.play('chime');
+      }
       onClaimed?.(xp, quest);
       setTimeout(() => setDrawing(false), reduce ? 200 : durations.questComplete);
     } catch (e) {
@@ -93,6 +97,7 @@ export default function AnimatedQuestCard({ quest, tone = 'dark', highlighted = 
           <View pointerEvents="none" style={{ position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' }}>
             <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.success, alignItems: 'center', justifyContent: 'center' }}>
               <Svg width={22} height={22} viewBox="0 0 24 24">
+                {/* colors.white flips with the scheme: white on the light-mode green, near-black on the brighter dark-mode green — legible in both. */}
                 <AnimatedPath d="M5 12.5 L10 17.5 L19 7" stroke={colors.white} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" fill="none" strokeDasharray={`${CHECK_LEN} ${CHECK_LEN}`} animatedProps={checkProps} />
               </Svg>
             </View>

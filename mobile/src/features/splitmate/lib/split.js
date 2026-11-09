@@ -7,7 +7,7 @@ import { personById } from '@/data/catalog';
 export const METHODS = [
   { value: 'equal', label: 'Equal' },
   { value: 'custom', label: 'Custom' },
-  { value: 'percentage', label: '%' },
+  { value: 'percentage', label: 'Percent' },
   { value: 'itemised', label: 'Items' },
 ];
 
@@ -20,10 +20,35 @@ export const toMinor = (s) => {
   const n = parseFloat(String(s ?? '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(n) ? Math.round(n * 100) : 0;
 };
-export const minorToInput = (m) => (m ? String(m / 100) : '');
+// Paise -> text for an input: '' for nothing, '250' for whole rupees and
+// '249.50' (always two decimals) when there are paise.
+export const minorToInput = (m) => {
+  const n = Math.round(Number(m) || 0);
+  if (n <= 0) return '';
+  const paise = n % 100;
+  return paise ? `${Math.floor(n / 100)}.${String(paise).padStart(2, '0')}` : String(n / 100);
+};
 
-// Names resolve through the store's user cache (filled from API responses).
-export const nameOf = (id, meName = 'You') => (id === 'me' ? meName : personById[id]?.name || 'Someone');
+// Indian digit grouping (1,23,456) without relying on Intl.
+const groupIN = (n) => {
+  const s = String(n);
+  if (s.length <= 3) return s;
+  return `${s.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${s.slice(-3)}`;
+};
+
+// Paise -> display money: '₹1,250' for whole rupees, '₹333.30' otherwise.
+// Always exact (integer maths) and never 'NaN'.
+export function money(minor) {
+  const n = Math.round(Number(minor) || 0);
+  const abs = Math.abs(n);
+  const paise = abs % 100;
+  return `${n < 0 ? '−' : ''}₹${groupIN(Math.floor(abs / 100))}${paise ? `.${String(paise).padStart(2, '0')}` : ''}`;
+}
+
+// Names resolve through the store's user cache (filled from API responses;
+// SplitBits.useKnownPeople fetches profiles that aren't cached yet).
+export const UNKNOWN_NAME = 'Member';
+export const nameOf = (id, meName = 'You') => (id === 'me' ? meName : personById[id]?.name || UNKNOWN_NAME);
 
 const IN_PLAN = new Set(['accepted', 'checked_in', 'completed']);
 
@@ -89,6 +114,34 @@ function distribute(total, weights) {
   return floors;
 }
 
+// Equal amounts in paise per person: { id: minor }, summing exactly to total.
+export function equalAmounts(total, ids) {
+  const parts = distribute(Math.max(0, Math.round(Number(total) || 0)), ids.map(() => 1));
+  return Object.fromEntries(ids.map((id, i) => [id, parts[i]]));
+}
+
+// Even percentages with at most two decimals that add up to exactly 100
+// (worked out in basis points, so 3 people -> 33.34 / 33.33 / 33.33).
+export function evenPercents(ids) {
+  const bp = distribute(10000, ids.map(() => 1));
+  return Object.fromEntries(ids.map((id, i) => [id, bp[i] / 100]));
+}
+
+// Spread what's left of `total` over the people whose amount is still blank
+// (0). -> new { id: minor } map, or null when nothing is left or nobody is blank.
+export function fillBlanks(amounts, ids, total) {
+  const assigned = ids.reduce((s, id) => s + (amounts[id] || 0), 0);
+  const left = total - assigned;
+  const blanks = ids.filter((id) => !amounts[id]);
+  if (left <= 0 || !blanks.length) return null;
+  const parts = distribute(left, blanks.map(() => 1));
+  const next = { ...amounts };
+  blanks.forEach((id, i) => {
+    next[id] = parts[i];
+  });
+  return next;
+}
+
 export function itemsSubtotal(items) {
   return items.reduce((s, it) => s + (it.amountMinor || 0), 0);
 }
@@ -135,7 +188,7 @@ export function computeShares(draft) {
         total,
         assigned: Math.round((total * pctSum) / 100),
         valid: false,
-        error: `Percentages add up to ${Math.round(pctSum * 100) / 100}% — they need to total 100%.`,
+        error: `Percentages add up to ${Math.round(pctSum * 100) / 100}%. They need to total 100%.`,
       };
     }
     shares = distribute(total, pct).map((amountMinor, i) => ({ userId: ids[i], amountMinor }));
@@ -148,17 +201,18 @@ export function computeShares(draft) {
   const assigned = shares.reduce((s, x) => s + x.amountMinor, 0);
   if (assigned !== total) {
     const diff = total - assigned;
-    return { shares, total, assigned, valid: false, error: diff > 0 ? `₹${(diff / 100).toFixed(2)} still unassigned.` : `Over by ₹${(-diff / 100).toFixed(2)}.` };
+    return { shares, total, assigned, valid: false, error: diff > 0 ? `${money(diff)} still unassigned.` : `Over by ${money(-diff)}.` };
   }
   return { shares, total, assigned, valid: true, error: null };
 }
 
-export const STATE_META = {
+// Function, not a constant: reads the live (light/dark) palette.
+export const stateMeta = () => ({
   unsettled: { label: 'Unpaid', bg: colors.surfaceSubtle, fg: colors.inkSoft, icon: 'circle' },
   marked_paid: { label: 'Marked paid', bg: colors.orangeSoft, fg: colors.ink, icon: 'clock' },
   confirmed: { label: 'Confirmed', bg: colors.mint, fg: colors.ink, icon: 'check' },
   disputed: { label: 'Disputed', bg: colors.pinkSoft, fg: colors.danger, icon: 'alert-circle' },
-};
+});
 
 // Totals from the current user's point of view.
 export function ledgerTotals(expenses) {
@@ -185,7 +239,7 @@ export function upiUrl({ payeeUpi, payeeName, amountMinor, note }) {
     `pn=${encodeURIComponent(payeeName)}`,
     `am=${(amountMinor / 100).toFixed(2)}`,
     'cu=INR',
-    `tn=${encodeURIComponent(note || 'Project IRL split')}`,
+    `tn=${encodeURIComponent(note || 'Come Over split')}`,
   ];
   return `upi://pay?${params.join('&')}`;
 }

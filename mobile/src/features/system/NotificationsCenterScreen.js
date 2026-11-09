@@ -2,62 +2,78 @@ import React, { useMemo } from 'react';
 import { Pressable, RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
-import { AppText, Icon, ListGroup, ListRow, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
+import { Checks } from 'phosphor-react-native/src/icons/Checks';
+import { AppText, IconButton, ListGroup, ListRow, QueryState, Screen, ScreenHeader, SectionHeader, usePressScale } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
-import { colors, radius, space } from '@/theme/tokens';
+import { colors, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
 import { relativeDay, timeLabel } from '@/utils/format';
+import IconBubble from './IconBubble';
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+// Bubble tones are palette names resolved at render, so dark mode applies.
 const TYPE = {
-  join: { icon: 'user-check', bg: colors.periwinkle, label: 'Plan update' },
-  message: { icon: 'message-circle', bg: colors.lavender, label: 'Message' },
-  nearby: { icon: 'map-pin', bg: colors.orange, label: 'Nearby' },
-  quest: { icon: 'award', bg: colors.pink, label: 'Quest' },
-  safety: { icon: 'shield', bg: colors.mint, label: 'Safety' },
+  join: { icon: 'user-check', tone: 'periwinkle', label: 'Plan update' },
+  message: { icon: 'chats', tone: 'lavender', label: 'Message' },
+  nearby: { icon: 'map-pin', tone: 'orange', label: 'Nearby' },
+  quest: { icon: 'trophy', tone: 'pink', label: 'Quest' },
+  safety: { icon: 'shield', tone: 'mint', label: 'Safety' },
 };
 
 const TAB_SCREENS = ['discover_home', 'live_radar', 'circles_home', 'profile_home'];
 
-function Row({ n, index, onPress }) {
+// One aligned row inside a grouped list: icon bubble, title + time, one body
+// line. Unread rows are bold with a dot; read rows are plain.
+function Row({ n, last, onPress }) {
   const t = TYPE[n.type] || TYPE.join;
   const when = relativeDay(n.createdAt) === 'Today' ? timeLabel(n.createdAt) : relativeDay(n.createdAt);
+  const press = usePressScale(0.98);
   return (
-    <Animated.View entering={enter(index)}>
-      <Pressable
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel={`${n.read ? '' : 'Unread. '}${t.label}: ${n.title}. ${n.body}. ${when}`}
-        style={{
-          flexDirection: 'row',
-          alignItems: 'flex-start',
-          padding: space.sm,
-          borderRadius: radius.card,
-          backgroundColor: n.read ? 'transparent' : colors.surface,
-          borderWidth: n.read ? 0 : 1.2,
-          borderColor: colors.border,
-          marginBottom: space.xs,
-        }}
-      >
-        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center' }}>
-          <Icon name={t.icon} size={18} />
+    <AnimatedPressable
+      onPress={onPress}
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
+      accessibilityRole="button"
+      accessibilityLabel={`${n.read ? '' : 'Unread. '}${t.label}: ${n.title}. ${n.body || ''}. ${when}`}
+      style={[{ flexDirection: 'row', alignItems: 'center', minHeight: 64, paddingVertical: space.sm, borderBottomWidth: last ? 0 : 1, borderBottomColor: colors.border }, press.style]}
+    >
+      <IconBubble icon={t.icon} tone={t.tone} size={40} iconSize={20} />
+      <View style={{ flex: 1, marginLeft: space.sm }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <AppText variant={n.read ? 'body' : 'bodyStrong'} style={{ flex: 1 }} numberOfLines={1}>
+            {n.title}
+          </AppText>
+          <AppText variant="caption" color={n.read ? colors.muted : colors.deep} style={{ marginLeft: space.xs }}>
+            {when}
+          </AppText>
+          {/* Fixed slot so read and unread rows share the same right edge. */}
+          <View style={{ width: space.sm, alignItems: 'flex-end' }}>{!n.read && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.deep }} />}</View>
         </View>
-        <View style={{ flex: 1, marginLeft: space.sm }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <AppText variant={n.read ? 'body' : 'bodyStrong'} style={{ flex: 1 }} numberOfLines={2}>
-              {n.title}
-            </AppText>
-            {!n.read && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.deep, marginLeft: 6 }} />}
-          </View>
-          <AppText variant="caption" color={colors.muted} style={{ marginTop: 2 }} numberOfLines={2}>
+        {!!n.body && (
+          <AppText variant="caption" color={colors.muted} style={{ marginTop: 2, marginRight: space.sm }} numberOfLines={2}>
             {n.body}
           </AppText>
-          <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: 4 }}>
-            {t.label} · {when}
-          </AppText>
-        </View>
-      </Pressable>
-    </Animated.View>
+        )}
+      </View>
+    </AnimatedPressable>
+  );
+}
+
+function Group({ title, items, onOpen, first }) {
+  if (!items.length) return null;
+  return (
+    <>
+      <SectionHeader title={title} style={{ marginTop: first ? space.sm : space.xl }} />
+      <Animated.View entering={enter(first ? 0 : 1)}>
+        <ListGroup>
+          {items.map((n, i) => (
+            <Row key={n.id} n={n} last={i === items.length - 1} onPress={() => onOpen(n)} />
+          ))}
+        </ListGroup>
+      </Animated.View>
+    </>
   );
 }
 
@@ -97,9 +113,10 @@ export default function NotificationsCenterScreen() {
           subtitle={subtitle}
           right={
             unread ? (
-              <AppText variant="label" color={colors.deep} onPress={markAll} accessibilityRole="button" suppressHighlighting>
-                Read all
-              </AppText>
+              // Icon button keeps the header slots balanced so the title stays centred.
+              <IconButton accessibilityLabel="Mark all as read" onPress={markAll}>
+                <Checks size={20} color={colors.ink} weight="bold" />
+              </IconButton>
             ) : null
           }
         />
@@ -115,43 +132,26 @@ export default function NotificationsCenterScreen() {
         style={{ marginTop: space.sm }}
         empty={{
           title: 'Nothing yet',
-          body: 'Join requests, plan updates and nearby plans will show up here.',
+          body: 'Join requests and plan updates show up here.',
           cta: 'Find a plan',
           onCta: () => nav.navigate('main', { screen: 'discover_home' }),
           pose: 'wave',
         }}
       >
         <>
-          {today.length > 0 && (
-            <>
-              <SectionHeader title="Today" style={{ marginTop: space.sm }} />
-              {today.map((n, i) => (
-                <Row key={n.id} n={n} index={i} onPress={() => open(n)} />
-              ))}
-            </>
-          )}
-          {earlier.length > 0 && (
-            <>
-              <SectionHeader title="Earlier" style={{ marginTop: today.length ? space.lg : space.sm }} />
-              {earlier.map((n, i) => (
-                <Row key={n.id} n={n} index={today.length + i} onPress={() => open(n)} />
-              ))}
-            </>
-          )}
+          <Group title="Today" items={today} onOpen={open} first />
+          <Group title="Earlier" items={earlier} onOpen={open} first={!today.length} />
           {q.status === 'error' && (
             <AppText variant="caption" color={colors.danger} align="center" style={{ marginTop: space.xs }} accessibilityLiveRegion="polite" onPress={q.reload}>
-              Couldn't refresh — showing what we had. Tap to retry.
+              Couldn't refresh. Showing what we had. Tap to retry.
             </AppText>
           )}
         </>
       </QueryState>
 
       <ListGroup style={{ marginTop: space.xl }}>
-        <ListRow icon="sliders" title="Notification settings" subtitle="Categories, quiet hours, frequency" onPress={() => nav.navigate('privacy_controls')} last />
+        <ListRow icon="sliders" title="Notification settings" subtitle="Safety alerts always come through" onPress={() => nav.navigate('account_settings')} last />
       </ListGroup>
-      <AppText variant="caption" color={colors.muted} align="center" style={{ marginTop: space.sm }}>
-        Nearby-plan alerts are capped at 2 a day. Safety alerts always come through.
-      </AppText>
     </Screen>
   );
 }

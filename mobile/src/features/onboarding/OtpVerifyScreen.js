@@ -5,7 +5,7 @@ import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSeque
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { AppText, Button, Icon } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
-import { colors, fonts, space } from '@/theme/tokens';
+import { colors, fonts, isDark, space } from '@/theme/tokens';
 import haptics from '@/utils/haptics';
 import OnboardingFrame from './components/OnboardingFrame';
 import { otpErrorMessage } from './authErrors';
@@ -14,6 +14,9 @@ const DEFAULT_LEN = 6; // the server reports the real length (Slide widget setti
 const MIN_LEN = 4;
 const MAX_LEN = 8;
 const RESEND_SEC = 30;
+const BOX_H = 60;
+
+const clock = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
 export default function OtpVerifyScreen() {
   const nav = useNavigation();
@@ -52,8 +55,10 @@ export default function OtpVerifyScreen() {
       await verifyOtp(value);
       haptics.success();
       // verifyOtp loads /me/bootstrap, so session flags reflect the server.
-      const { session } = useAppStore.getState();
-      if (session.onboarded) nav.reset({ index: 0, routes: [{ name: 'main' }] });
+      const { session, profile, prefs } = useAppStore.getState();
+      // Ask "What are you?" before home (once) for accounts that never answered.
+      if (session.onboarded && !profile.socialStyle && !prefs.socialStyleAsked) nav.reset({ index: 0, routes: [{ name: 'social_style', params: { mode: 'prompt' } }] });
+      else if (session.onboarded) nav.reset({ index: 0, routes: [{ name: 'main' }] });
       else if (session.ageConfirmed) nav.reset({ index: 0, routes: [{ name: 'profile_setup' }] });
       else nav.reset({ index: 0, routes: [{ name: 'age_gate' }] });
     } catch (e) {
@@ -97,11 +102,11 @@ export default function OtpVerifyScreen() {
       stepId="otp_verify"
       keyboard
       title="Enter the code"
-      subtitle={`Sent${via} to ${masked}.`}
+      subtitle={`Sent${via} to ${masked}`}
       footer={<Button title="Verify" onPress={() => verify(code)} loading={loading} disabled={code.length < MIN_LEN || locked} />}
     >
       <Pressable onPress={() => inputRef.current?.focus()} accessibilityRole="none" accessibilityLabel="One-time code input">
-        <Animated.View style={[{ flexDirection: 'row', justifyContent: 'space-between' }, shakeStyle]}>
+        <Animated.View style={[{ flexDirection: 'row', justifyContent: 'center', gap: LEN > 6 ? 6 : space.xs }, shakeStyle]}>
           {Array.from({ length: LEN }).map((_, i) => {
             const ch = code[i];
             const active = i === code.length && !locked;
@@ -109,17 +114,20 @@ export default function OtpVerifyScreen() {
               <View
                 key={i}
                 style={{
-                  width: 48,
-                  height: 60,
+                  flex: 1,
+                  maxWidth: 56,
+                  height: BOX_H,
                   borderRadius: 16,
-                  backgroundColor: locked ? colors.surfaceSubtle : colors.surface,
+                  backgroundColor: locked ? colors.surfaceSubtle : ch ? colors.periwinkleWash : colors.surface,
                   borderWidth: active ? 2 : 1.2,
-                  borderColor: error ? colors.danger : active ? colors.ink : colors.border,
+                  borderColor: error ? colors.danger : active ? colors.ink : ch ? colors.periwinkle : colors.border,
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
               >
-                <AppText variant="h1">{ch || ''}</AppText>
+                <AppText variant="h1" maxScale={1.2}>
+                  {ch || ''}
+                </AppText>
               </View>
             );
           })}
@@ -141,51 +149,52 @@ export default function OtpVerifyScreen() {
           maxLength={LEN}
           accessibilityLabel={`Enter the ${LEN}-digit code`}
           caretHidden
-          style={{ position: 'absolute', width: '100%', height: 60, opacity: 0.01, fontFamily: fonts.regular }}
+          keyboardAppearance={isDark() ? 'dark' : 'light'}
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: BOX_H, opacity: 0.01, color: colors.ink, fontFamily: fonts.regular }}
         />
       </Pressable>
 
       {error && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm }} accessibilityLiveRegion="polite">
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: space.sm }} accessibilityLiveRegion="polite">
           <Icon name="alert-circle" size={15} color={colors.danger} />
-          <AppText variant="caption" color={colors.danger} style={{ marginLeft: 6, flex: 1 }}>
+          <AppText variant="caption" color={colors.danger} style={{ marginLeft: 6, flexShrink: 1 }}>
             {error}
           </AppText>
         </View>
       )}
       {resent && !error && (
-        <AppText variant="caption" color={colors.success} style={{ marginTop: space.sm }} accessibilityLiveRegion="polite">
+        <AppText variant="caption" color={colors.success} align="center" style={{ marginTop: space.sm }} accessibilityLiveRegion="polite">
           {typeof resent === 'string' ? resent : `New code sent${via}.`}
         </AppText>
       )}
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: space.xl }}>
-        <AppText variant="label" color={colors.muted}>
-          Didn't get it?
-        </AppText>
+      {/* Secondary actions: one centred column of quiet buttons. The only
+          filled button on this step is "Verify" in the footer. */}
+      <View style={{ alignItems: 'center', marginTop: space.xl, gap: space.xxs }}>
         <Button
-          title={seconds > 0 ? `Resend in 0:${String(seconds).padStart(2, '0')}` : 'Resend code'}
+          title={seconds > 0 ? `Resend code in ${clock(seconds)}` : 'Resend code'}
           size="sm"
-          variant={seconds > 0 ? 'secondary' : 'primary'}
+          variant="secondary"
           full={false}
+          align="center"
           disabled={seconds > 0 || resending}
           loading={resending}
           onPress={() => resend()}
         />
+        {other && seconds <= 0 && (
+          <Button
+            title={other === 'sms' ? 'Send by SMS instead' : 'Send on WhatsApp instead'}
+            icon={other === 'sms' ? 'message-square' : 'message-circle'}
+            variant="ghost"
+            size="sm"
+            full={false}
+            align="center"
+            disabled={resending}
+            onPress={() => resend(other)}
+          />
+        )}
+        <Button title="Change number" variant="ghost" size="sm" full={false} align="center" onPress={() => nav.goBack()} />
       </View>
-      {other && seconds <= 0 && (
-        <Button
-          title={other === 'sms' ? 'Send by SMS instead' : 'Send on WhatsApp instead'}
-          icon={other === 'sms' ? 'message-square' : 'message-circle'}
-          variant="secondary"
-          size="sm"
-          full={false}
-          disabled={resending}
-          style={{ marginTop: space.xs }}
-          onPress={() => resend(other)}
-        />
-      )}
-      <Button title="Change number" variant="ghost" size="sm" full={false} style={{ marginTop: space.xs }} onPress={() => nav.goBack()} />
     </OnboardingFrame>
   );
 }

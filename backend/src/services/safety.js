@@ -62,7 +62,7 @@ async function runModerationAlert({ reportId, appeal = false }) {
   const r = await Report.findById(reportId).select('reasonCode priority status').lean();
   if (!r) return { skipped: 'report_not_found' };
   if (!appeal && !['urgent', 'high'].includes(r.priority)) return { skipped: 'low_priority' };
-  const title = `[IRL ${appeal ? 'APPEAL' : r.priority.toUpperCase()}] ${r.reasonCode}`;
+  const title = `[ComeOver ${appeal ? 'APPEAL' : r.priority.toUpperCase()}] ${r.reasonCode}`;
   const body = `${appeal ? 'New appeal' : 'New report'} ${r._id} (${r.reasonCode}, ${r.priority}). Review in the admin console.`;
   const staff = await User.find({ roles: { $in: ['admin', 'moderator'] }, status: { $nin: ['suspended', 'deleted'] } }).select('_id').lean();
   for (const s of staff) {

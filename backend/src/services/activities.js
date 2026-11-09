@@ -94,7 +94,7 @@ async function hydrate(docs, viewerId, { session } = {}) {
   const s = sess(session);
   const [hosts, hostCompleted, parts, mine, convs, campaigns, cats] = await Promise.all([
     User.find({ _id: { $in: hostIds } })
-      .select('status profile.displayName profile.avatarKey profile.reliabilityScore progress.level')
+      .select('status profile.displayName profile.avatarKey profile.reliabilityScore profile.socialStyle progress.level')
       .session(s)
       .lean(),
     Participant.aggregate([{ $match: { userId: { $in: hostIds }, state: 'completed' } }, { $group: { _id: '$userId', n: { $sum: 1 } } }]).session(s),

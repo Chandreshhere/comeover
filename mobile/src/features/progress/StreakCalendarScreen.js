@@ -1,11 +1,13 @@
-// streak_calendar — consistency calendar with weekly goals, rest days and
-// a freeze. Weekly by default; daily streak is opt-in. Never shames misses.
+// streak_calendar — streak summary (with the freeze), month calendar, recent
+// weekly goals and the one optional setting. Weekly by default; daily streak
+// is opt-in. Never shames misses.
 // Data: GET /me/streak-calendar?months=3 → { days:[{date:'YYYY-MM-DD', state}], weeks:[{start, done, goal, froze?}] }
 import React, { useEffect, useMemo, useState } from 'react';
 import { RefreshControl, View, useWindowDimensions } from 'react-native';
 import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSequence, withSpring, withTiming } from 'react-native-reanimated';
-import { AppText, Button, Card, HeroCard, Icon, IconButton, ListGroup, ListRow, Pictogram, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
-import { colors, layout, radius, space } from '@/theme/tokens';
+import { Snowflake } from 'phosphor-react-native/src/icons/Snowflake';
+import { AppText, Button, Card, HeroCard, Icon, IconBubble, IconButton, ListGroup, ListRow, Pictogram, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
+import { colors, fonts, layout, space } from '@/theme/tokens';
 import { durations, spring } from '@/theme/motion';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
@@ -16,6 +18,7 @@ import { ActionError, errorText } from './components/progressShared';
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const KNOWN_STATES = new Set(['done', 'rest', 'freeze', 'missed', 'none']);
 const MONTHS_REQUESTED = 3;
+const WEEKS_PREVIEW = 4;
 
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -49,16 +52,17 @@ function buildMonth(year, month, dayStates, today) {
   return cells;
 }
 
-const CELL_STYLE = {
+// Function, not a constant: reads the live (light/dark) palette.
+const cellStyles = () => ({
   done: { bg: colors.ink, fg: colors.white },
   today_done: { bg: colors.orange, fg: colors.ink, border: colors.ink },
-  today: { bg: colors.white, fg: colors.ink, border: colors.orange },
+  today: { bg: colors.surface, fg: colors.ink, border: colors.orange },
   rest: { bg: colors.lavender, fg: colors.inkSoft },
   freeze: { bg: colors.periwinkleWash, fg: colors.deep, border: colors.deep },
   missed: { bg: 'transparent', fg: colors.inkSoft },
   future: { bg: 'transparent', fg: colors.muted },
-  none: { bg: 'transparent', fg: colors.border },
-};
+  none: { bg: 'transparent', fg: colors.muted },
+});
 
 const LABEL = { done: 'verified meetup', today_done: 'today, meetup verified', today: 'today', rest: 'rest day', freeze: 'freeze used', missed: 'no meetup', future: 'upcoming', none: 'no data' };
 
@@ -72,7 +76,8 @@ function DayCell({ cell, size }) {
   }, [cell?.state, reduce]);
   const a = useAnimatedStyle(() => ({ transform: [{ scale: s.value }] }));
   if (!cell) return <View style={{ width: size, height: size }} />;
-  const st = CELL_STYLE[cell.state] || CELL_STYLE.none;
+  const all = cellStyles();
+  const st = all[cell.state] || all.none;
   const inner = size - 8;
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }} accessible accessibilityLabel={`${cell.n} ${monthShort[cell.date.getMonth()]}, ${LABEL[cell.state]}`}>
@@ -85,10 +90,12 @@ function DayCell({ cell, size }) {
         {cell.state === 'done' || cell.state === 'today_done' ? (
           <Pictogram name="check" size={inner * 0.5} color={st.fg} strokeWidth={3} />
         ) : cell.state === 'freeze' ? (
-          <Icon name="shield" size={inner * 0.4} color={st.fg} />
+          <Snowflake size={inner * 0.42} color={st.fg} weight="bold" />
+        ) : cell.state === 'rest' ? (
+          <Icon name="moon" size={inner * 0.42} color={st.fg} weight="duotone" />
         ) : (
-          <AppText variant="caption" color={st.fg} style={cell.isToday ? { fontFamily: 'Poppins-Bold' } : null}>
-            {cell.state === 'rest' ? 'z' : cell.n}
+          <AppText variant="caption" color={st.fg} style={[{ opacity: cell.state === 'none' ? 0.6 : 1 }, cell.isToday ? { fontFamily: fonts.bold } : null]}>
+            {cell.n}
           </AppText>
         )}
       </Animated.View>
@@ -98,7 +105,7 @@ function DayCell({ cell, size }) {
 
 function Legend({ color, border, label, children }) {
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: space.md, marginBottom: 6 }}>
+    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
       <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: color, borderWidth: border ? 1.5 : 0, borderColor: border, alignItems: 'center', justifyContent: 'center' }}>{children}</View>
       <AppText variant="caption" color={colors.inkSoft} style={{ marginLeft: 6 }}>
         {label}
@@ -117,6 +124,7 @@ export default function StreakCalendarScreen() {
   const calendarL = useLoader('streakCalendar', (s) => s.loadStreakCalendar(MONTHS_REQUESTED));
   const progressL = useLoader('progress', (s) => s.loadProgress());
   const [offset, setOffset] = useState(0);
+  const [allWeeks, setAllWeeks] = useState(false);
   const [freezing, setFreezing] = useState(false);
   const [actionError, setActionError] = useState(null);
 
@@ -178,9 +186,14 @@ export default function StreakCalendarScreen() {
     }
   };
 
+  const streak = progress.streakWeeks ?? 0;
+  const goal = progress.weeklyGoal ?? 0;
+  const freezes = progress.freezesLeft ?? 0;
+  const shownWeeks = allWeeks ? weeks : weeks.slice(0, WEEKS_PREVIEW);
+
   return (
     <Screen
-      header={<ScreenHeader title="Streak" subtitle="Weekly goals, your pace" />}
+      header={<ScreenHeader title="Streak" />}
       refreshControl={
         <RefreshControl
           refreshing={calendarL.refreshing || progressL.refreshing}
@@ -192,52 +205,45 @@ export default function StreakCalendarScreen() {
         />
       }
     >
-      <HeroCard>
+      {/* Summary + freeze */}
+      <HeroCard style={{ marginTop: space.xs }}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name="zap" size={28} color={colors.orange} />
-          </View>
-          <View style={{ flex: 1, marginLeft: space.md }}>
-            <AppText variant="display">
-              {progress.streakWeeks} week{progress.streakWeeks === 1 ? '' : 's'}
+          <IconBubble size={52} tone="surface" icon="fire" iconSize={28} duo={colors.orange} />
+          <View style={{ flex: 1, marginLeft: space.sm }}>
+            <AppText variant="h1" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+              {streak}-week streak
             </AppText>
-            <AppText variant="label" color={colors.inkSoft}>
-              Weekly goal: {progress.weeklyGoal} verified meetups
+            <AppText variant="caption" color={colors.inkSoft}>
+              {Math.min(progress.weeklyDone ?? 0, goal)} of {goal} meetups this week
             </AppText>
           </View>
         </View>
-        <View style={{ flexDirection: 'row', gap: space.xs, marginTop: space.md }}>
-          <View style={{ flex: 1, backgroundColor: colors.glass, borderRadius: radius.quest, padding: space.sm }}>
-            <AppText variant="caption" color={colors.inkSoft}>
-              This week
-            </AppText>
-            <AppText variant="h3">
-              {Math.min(progress.weeklyDone, progress.weeklyGoal)}/{progress.weeklyGoal}
-            </AppText>
-          </View>
-          <View style={{ flex: 1, backgroundColor: colors.glass, borderRadius: radius.quest, padding: space.sm }}>
-            <AppText variant="caption" color={colors.inkSoft}>
-              Freezes left
-            </AppText>
-            <AppText variant="h3">{progress.freezesLeft}</AppText>
-          </View>
-          <View style={{ flex: 1, backgroundColor: colors.glass, borderRadius: radius.quest, padding: space.sm }}>
-            <AppText variant="caption" color={colors.inkSoft}>
-              {offset === 0 ? 'This month' : monthShort[view.getMonth()]}
-            </AppText>
-            <AppText variant="h3">{calendar ? monthDone : '—'}</AppText>
-          </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.md, minHeight: 32 }}>
+          <Snowflake size={16} color={colors.ink} weight="bold" />
+          <AppText variant="label" style={{ flex: 1, marginLeft: space.xs }}>
+            {freezes} freeze{freezes === 1 ? '' : 's'} left
+          </AppText>
+          {canFreeze ? <Button title="Use freeze" size="xs" variant="light" full={false} loading={freezing} disabled={freezing} onPress={freeze} /> : null}
         </View>
+        <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.xxs }}>
+          Rest days never break a streak.
+        </AppText>
       </HeroCard>
+      <ActionError message={actionError} onDismiss={() => setActionError(null)} />
 
       {/* Calendar */}
-      <QueryState status={calendarL.status} error={calendarL.error} hasData={!!calendar} onRetry={calendarL.reload} skeletonRows={1} skeletonHeight={300} style={{ marginTop: space.md }}>
-        <Card style={{ marginTop: space.md }}>
+      <QueryState status={calendarL.status} error={calendarL.error} hasData={!!calendar} onRetry={calendarL.reload} skeletonRows={1} skeletonHeight={300} style={{ marginTop: space.xl }}>
+        <Card style={{ marginTop: space.xl }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: space.sm }}>
             <IconButton icon="chevron-left" size={40} accessibilityLabel="Previous month" onPress={() => setOffset((o) => Math.max(oldestOffset, o - 1))} style={{ opacity: offset <= oldestOffset ? 0.3 : 1 }} />
-            <AppText variant="h3" accessibilityRole="header">
-              {MONTH_FULL[view.getMonth()]} {view.getFullYear()}
-            </AppText>
+            <View style={{ alignItems: 'center' }}>
+              <AppText variant="h3" accessibilityRole="header">
+                {MONTH_FULL[view.getMonth()]} {view.getFullYear()}
+              </AppText>
+              <AppText variant="caption" color={colors.muted}>
+                {calendar ? monthDone : 0} meetup{monthDone === 1 ? '' : 's'}
+              </AppText>
+            </View>
             <IconButton icon="chevron-right" size={40} accessibilityLabel="Next month" onPress={() => setOffset((o) => Math.min(0, o + 1))} style={{ opacity: offset >= 0 ? 0.3 : 1 }} />
           </View>
           <View style={{ flexDirection: 'row' }}>
@@ -254,17 +260,23 @@ export default function StreakCalendarScreen() {
               ))}
             </View>
           ))}
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: space.sm }}>
-            <Legend color={colors.ink} label="Meetup">
-              <Pictogram name="check" size={9} color={colors.white} strokeWidth={4} />
-            </Legend>
-            <Legend color={colors.lavender} label="Rest day" />
-            <Legend color={colors.periwinkleWash} border={colors.deep} label="Freeze" />
-            <Legend color={colors.white} border={colors.orange} label="Today" />
+          <View style={{ gap: space.xs, marginTop: space.sm }}>
+            <View style={{ flexDirection: 'row' }}>
+              <Legend color={colors.ink} label="Meetup">
+                <Pictogram name="check" size={9} color={colors.white} strokeWidth={4} />
+              </Legend>
+              <Legend color={colors.lavender} label="Rest day">
+                <Icon name="moon" size={9} color={colors.inkSoft} weight="fill" />
+              </Legend>
+            </View>
+            <View style={{ flexDirection: 'row' }}>
+              <Legend color={colors.periwinkleWash} border={colors.deep} label="Freeze" />
+              <Legend color={colors.surface} border={colors.orange} label="Today" />
+            </View>
           </View>
           {serverDays.length === 0 ? (
-            <AppText variant="caption" color={colors.muted} style={{ marginTop: space.xs }}>
-              Your calendar fills in as you complete verified meetups.
+            <AppText variant="caption" color={colors.muted} style={{ marginTop: space.sm }}>
+              Fills in as you complete verified meetups.
             </AppText>
           ) : null}
         </Card>
@@ -273,23 +285,32 @@ export default function StreakCalendarScreen() {
       {/* Weeks */}
       {weeks.length > 0 && (
         <>
-          <SectionHeader title="Weekly goals" />
-          <Card style={{ paddingVertical: 4 }}>
-            {weeks.map((w, i) => {
+          <SectionHeader
+            title="Weekly goals"
+            action={weeks.length > WEEKS_PREVIEW ? (allWeeks ? 'Show less' : 'Show all') : undefined}
+            onAction={() => setAllWeeks((v) => !v)}
+          />
+          <Card style={{ paddingVertical: space.xxs }}>
+            {shownWeeks.map((w, i) => {
               const met = w.done >= w.goal;
               return (
-                <View key={w.key} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: i === weeks.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
-                  <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: met ? colors.mint : w.froze ? colors.periwinkleWash : colors.surfaceSubtle, alignItems: 'center', justifyContent: 'center' }}>
-                    <Icon name={met ? 'check' : w.froze ? 'shield' : w.current ? 'clock' : 'minus'} size={16} color={met ? colors.success : colors.inkSoft} />
+                <View
+                  key={w.key}
+                  style={{ flexDirection: 'row', alignItems: 'center', minHeight: 56, paddingVertical: space.xs, borderBottomWidth: i === shownWeeks.length - 1 ? 0 : 1, borderBottomColor: colors.border }}
+                >
+                  <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: met ? colors.mint : w.froze ? colors.periwinkleWash : colors.surfaceSubtle, alignItems: 'center', justifyContent: 'center' }}>
+                    {w.froze && !met ? (
+                      <Snowflake size={16} color={colors.deep} weight="bold" />
+                    ) : (
+                      <Icon name={met ? 'check' : w.current ? 'clock' : 'minus'} size={16} color={met ? colors.success : colors.inkSoft} />
+                    )}
                   </View>
                   <View style={{ flex: 1, marginLeft: space.sm }}>
                     <AppText variant="bodyStrong">
                       Week of {w.from.getDate()} {monthShort[w.from.getMonth()]}
                     </AppText>
                     <AppText variant="caption" color={colors.muted}>
-                      {w.current ? 'In progress · ' : ''}
-                      {w.done} meetup{w.done === 1 ? '' : 's'}
-                      {met ? ' · goal met' : w.froze ? ' · protected by a freeze' : w.current ? '' : ' · a lighter week'}
+                      {w.current ? 'In progress' : met ? 'Goal met' : w.froze ? 'Covered by a freeze' : 'A lighter week'}
                     </AppText>
                   </View>
                   <AppText variant="label">
@@ -302,37 +323,21 @@ export default function StreakCalendarScreen() {
         </>
       )}
 
-      {/* Controls */}
-      <SectionHeader title="Your rules" />
+      {/* Setting */}
+      <SectionHeader title="Settings" />
       <ListGroup>
         <ListRow
           icon="sun"
-          title="Daily streak (optional)"
-          subtitle="Off by default. Weekly goals already keep your streak."
+          title="Daily streak"
+          subtitle="Optional. Weekly goals already count."
           toggle={!!dailyOptIn}
           onToggle={(v) => {
             haptics.select();
             setPrefs({ dailyStreakOptIn: v });
           }}
+          last
         />
-        <ListRow icon="moon" title="Rest days" subtitle="Any day without a plan is a rest day — they never break a streak." last />
       </ListGroup>
-
-      <Card style={{ marginTop: space.md, flexDirection: 'row', alignItems: 'center' }} bg={colors.periwinkleWash} elevated={false}>
-        <Icon name="shield" size={22} color={colors.deep} />
-        <View style={{ flex: 1, marginHorizontal: space.sm }}>
-          <AppText variant="bodyStrong">Streak freeze</AppText>
-          <AppText variant="caption" color={colors.inkSoft}>
-            {progress.freezesLeft > 0 ? (canFreeze ? 'Cover a quiet day this week.' : 'Nothing to cover right now.') : 'You get a new freeze each month.'}
-          </AppText>
-        </View>
-        <Button title="Use" size="xs" full={false} disabled={!canFreeze || freezing} loading={freezing} onPress={freeze} />
-      </Card>
-      <ActionError message={actionError} onDismiss={() => setActionError(null)} />
-
-      <AppText variant="caption" color={colors.muted} align="center" style={{ marginTop: space.lg }}>
-        Life happens. Missing a week never limits what you can do in Project IRL.
-      </AppText>
     </Screen>
   );
 }

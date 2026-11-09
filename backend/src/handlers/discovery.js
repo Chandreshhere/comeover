@@ -8,6 +8,7 @@ const geo = require('../lib/geo');
 const { pageParams, encodeCursor } = require('../lib/page');
 const { istDay } = require('../lib/xp');
 const P = require('../lib/present');
+const SM = require('../lib/socialMatch');
 const A = require('../services/activities');
 
 const models = () => require('../models');
@@ -17,6 +18,13 @@ async function pageActivities(rows, page, viewerId, opts) {
   const more = rows.length > page.limit;
   const items = await A.presentMany(rows.slice(0, page.limit), viewerId, opts);
   return { items, nextCursor: more ? encodeCursor({ o: page.offset + page.limit }) : null };
+}
+
+// The viewer's social style ('introvert'|'ambivert'|'extrovert') or null.
+async function socialStyleOf(userId) {
+  const { User } = models();
+  const u = await User.findById(userId).select('profile.socialStyle').lean();
+  return P.socialStyleOf(u && u.profile);
 }
 
 async function availabilityOf(userId) {
@@ -88,8 +96,14 @@ const routes = {
     );
     const point = await A.referencePoint(req.query);
     const page = pageParams(req.query);
-    const rows = await A.findActivities(user.id, { point, radiusKm: q.radius, category: q.category, when: q.when, q: q.q, limit: page.fetchLimit, offset: page.offset });
-    return pageActivities(rows, page, user.id);
+    const [rows, style] = await Promise.all([
+      A.findActivities(user.id, { point, radiusKm: q.radius, category: q.category, when: q.when, q: q.q, limit: page.fetchLimit, offset: page.offset }),
+      socialStyleOf(user.id),
+    ]);
+    const out = await pageActivities(rows, page, user.id);
+    // Gentle social-style nudge inside this page only (start time stays the main order).
+    if (style) out.items = SM.rankPlans(out.items, style);
+    return { ...out, rankedFor: style };
   },
 
   'GET /v1/activities/featured': async (req) => {
@@ -163,7 +177,7 @@ const routes = {
     const page = pageParams(req.query, { def: 20, max: 50 });
     const radiusKm = geo.clampRadiusKm(req.query.radius);
     const { User } = models();
-    const scope = await A.viewerScope(user.id);
+    const [scope, myStyle] = await Promise.all([A.viewerScope(user.id), socialStyleOf(user.id)]);
     const prefixes = A.coveringPrefixes(point.lat, point.lng, radiusKm);
     const now = new Date();
     const candidates = await User.find({
@@ -175,16 +189,18 @@ const routes = {
       $or: [{ 'availability.until': null }, { 'availability.until': { $gt: now } }],
       'availability.coarseCell': { $in: prefixes.map((p) => new RegExp(`^${p}`)) },
     })
-      .select('profile progress availability')
+      .select('profile progress availability preferences.avatarSeed')
       .limit(1000)
       .lean();
+    // Best social-energy match first (nobody is filtered out), then free now, then nearest.
+    const compat = (u) => SM.styleCompat(myStyle, u.profile && u.profile.socialStyle) ?? SM.NEUTRAL;
     const withDist = candidates
       .map((u) => {
         const c = A.geohashCenter(u.availability.coarseCell);
-        return c ? { u, d: geo.haversineMeters({ latitude: point.lat, longitude: point.lng }, c) } : null;
+        return c ? { u, d: geo.haversineMeters({ latitude: point.lat, longitude: point.lng }, c), c: compat(u) } : null;
       })
       .filter((x) => x && x.d <= radiusKm * 1000)
-      .sort((a, b) => (b.u.availability.status === 'now') - (a.u.availability.status === 'now') || a.d - b.d);
+      .sort((a, b) => b.c - a.c || (b.u.availability.status === 'now') - (a.u.availability.status === 'now') || a.d - b.d);
     const slice = withDist.slice(page.offset, page.offset + page.limit);
     const counts = await completedCounts(slice.map((x) => x.u._id));
     const items = await Promise.all(slice.map((x) => P.publicUser(x.u, { distanceM: x.d, completed: counts.get(x.u._id) || 0, area: x.u.availability.area || undefined })));
@@ -221,7 +237,7 @@ const routes = {
     const [acts, people, venues] = await Promise.all([
       A.findActivities(user.id, { point, radiusKm: req.query.radius || geo.MAX_RADIUS_KM, q, limit: 10, offset: 0 }),
       User.find({ _id: { $nin: [user.id, ...scope.blocked] }, status: 'active', 'profile.visibility': 'discoverable', 'profile.displayName': re })
-        .select('profile progress availability')
+        .select('profile progress availability preferences.avatarSeed')
         .sort({ 'profile.displayName': 1 })
         .limit(10)
         .lean(),

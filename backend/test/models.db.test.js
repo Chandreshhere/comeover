@@ -118,7 +118,7 @@ test('seed is idempotent', async (t) => {
   const second = await seed();
   assert.deepEqual(second, { categories: 0, levels: 0, quests: 0, achievements: 0, cityAreas: 0 });
   const { Category, CityArea } = require('../src/models');
-  assert.equal(await Category.countDocuments(), 14);
+  assert.equal(await Category.countDocuments(), 16);
   assert.equal(await CityArea.countDocuments(), 9);
 });
 

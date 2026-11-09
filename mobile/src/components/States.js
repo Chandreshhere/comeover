@@ -1,3 +1,4 @@
+import GuideCharacter from '@/features/guide/GuideCharacter';
 import React, { useEffect } from 'react';
 import { View } from 'react-native';
 import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
@@ -5,16 +6,27 @@ import { colors, radius, space } from '@/theme/tokens';
 import { MascotArt } from '@/illustrations/Mascot';
 import AppText from './AppText';
 import Button from './Button';
+import { IconBubble } from './Card';
 import Icon from './Icon';
 
 // Friendly empty state with the mascot — never a dead end: always offer an action.
 export function EmptyState({ title, body, cta, onCta, secondary, onSecondary, pose = 'wave', compact = false, style }) {
+  const w = compact ? 120 : 170;
+  const h = compact ? 110 : 150;
   return (
     <View style={[{ alignItems: 'center', paddingVertical: compact ? space.lg : space.xxl, paddingHorizontal: space.md }, style]}>
-      <View style={{ width: compact ? 120 : 170, height: compact ? 110 : 150, borderRadius: radius.card, backgroundColor: colors.periwinkleWash, alignItems: 'center', justifyContent: 'center', marginBottom: space.lg }}>
+      {/* Mo stands on his own: no box behind him. */}
+      <View style={{ width: w, height: h, alignItems: 'center', justifyContent: 'center', marginBottom: space.md }}>
+        {/* Two little sparkles in the empty corners — playful, never over the mascot. */}
+        <View pointerEvents="none" style={{ position: 'absolute', left: '8%', top: '9%' }}>
+          <Icon name="sparkle" size={compact ? 12 : 16} color={colors.orange} weight="fill" />
+        </View>
+        <View pointerEvents="none" style={{ position: 'absolute', right: '6%', bottom: '8%' }}>
+          <Icon name="sparkle" size={compact ? 9 : 12} color={colors.deep} weight="fill" />
+        </View>
         <MascotArt size={compact ? 100 : 140} pose={pose} showMotionLines={false} />
       </View>
-      <AppText variant="h2" align="center">
+      <AppText variant="h2" align="center" accessibilityRole="header">
         {title}
       </AppText>
       {!!body && (
@@ -22,35 +34,40 @@ export function EmptyState({ title, body, cta, onCta, secondary, onSecondary, po
           {body}
         </AppText>
       )}
-      {cta && <Button title={cta} onPress={onCta} full={false} style={{ marginTop: space.lg }} />}
-      {secondary && <Button title={secondary} onPress={onSecondary} variant="ghost" full={false} style={{ marginTop: space.xs }} />}
+      {!!cta && <Button title={cta} onPress={onCta} full={false} align="center" style={{ marginTop: space.lg }} />}
+      {!!secondary && <Button title={secondary} onPress={onSecondary} variant="ghost" full={false} align="center" style={{ marginTop: space.xs }} />}
     </View>
   );
 }
 
 const ERROR_COPY = {
-  offline: { icon: 'wifi-off', title: "You're offline", body: "We'll reconnect automatically. Your drafts are saved on this device." },
-  permission: { icon: 'map-pin', title: 'Location is off', body: 'Pick your area manually instead — plans still work without GPS.' },
-  api: { icon: 'cloud-off', title: 'Something went wrong', body: "That's on us. Try again in a moment." },
-  restricted: { icon: 'shield-off', title: 'Account limited', body: 'Some actions are paused while a report is reviewed. You can still use safety tools and appeal.' },
-  maintenance: { icon: 'tool', title: 'Quick tune-up', body: "We're doing maintenance. Back shortly." },
+  offline: { icon: 'wifi-off', tone: 'periwinkle', title: "You're offline", body: "We'll reconnect automatically. Your drafts are saved on this device." },
+  permission: { icon: 'map-pin', tone: 'mint', title: 'Location is off', body: 'Pick your area manually instead. Plans still work without GPS.' },
+  api: { icon: 'cloud-off', tone: 'pink', title: 'Something went wrong', body: "That's on us. Try again in a moment." },
+  restricted: { icon: 'shield-off', tone: 'orange', title: 'Account limited', body: 'Some actions are paused while a report is reviewed. You can still use safety tools and appeal.' },
+  maintenance: { icon: 'tool', tone: 'lavender', title: 'Quick tune-up', body: "We're doing maintenance. Back shortly." },
 };
+
+const MO_MOOD = { offline: 'sad', api: 'sad', permission: 'think', maintenance: 'think' };
 
 export function ErrorState({ kind = 'api', title, body, onRetry, retryLabel = 'Try again', secondary, onSecondary, style }) {
   const c = ERROR_COPY[kind] || ERROR_COPY.api;
+  const mood = MO_MOOD[kind];
   return (
     <View style={[{ alignItems: 'center', paddingVertical: space.xxl, paddingHorizontal: space.md }, style]} accessibilityLiveRegion="polite">
-      <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', marginBottom: space.md }}>
-        <Icon name={c.icon} size={28} color={colors.ink} />
-      </View>
-      <AppText variant="h2" align="center">
+      {mood ? (
+        <GuideCharacter size={132} state={mood} decorative style={{ marginBottom: space.sm }} />
+      ) : (
+        <IconBubble size={80} tone={c.tone} icon={c.icon} iconSize={36} style={{ marginBottom: space.md }} />
+      )}
+      <AppText variant="h2" align="center" accessibilityRole="header">
         {title || c.title}
       </AppText>
       <AppText color={colors.muted} align="center" style={{ marginTop: space.xs, maxWidth: 300 }}>
         {body || c.body}
       </AppText>
-      {onRetry && <Button title={retryLabel} onPress={onRetry} full={false} style={{ marginTop: space.lg }} icon="refresh-cw" />}
-      {secondary && <Button title={secondary} onPress={onSecondary} variant="ghost" full={false} style={{ marginTop: space.xs }} />}
+      {!!onRetry && <Button title={retryLabel} onPress={onRetry} full={false} align="center" style={{ marginTop: space.lg }} icon="refresh-cw" />}
+      {!!secondary && <Button title={secondary} onPress={onSecondary} variant="ghost" full={false} align="center" style={{ marginTop: space.xs }} />}
     </View>
   );
 }

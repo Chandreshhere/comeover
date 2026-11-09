@@ -1,0 +1,4 @@
+<resources>
+    <!-- Launch background: matches the animated JS splash (src/features/splash). -->
+    <color name="splash_background">#0B0C12</color>
+</resources>

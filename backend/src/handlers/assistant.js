@@ -19,7 +19,7 @@ const WHEN = ['now', 'in15', 'tonight', 'tomorrow', 'weekend', 'custom'];
 
 // Cheap pre-filter; the model is also instructed to refuse (defence in depth).
 const BLOCKED_INTENT = /\b(dating|(on a|for a|romantic|blind|dinner) date\b|girlfriend|boyfriend|hook ?up|escort|call ?girl|sugar (daddy|baby)|paid compan|rent a (girl|boy|friend)|one[- ]night|flirt|sexy|nsfw|massage (girl|parlou?r))/i;
-const REFUSAL_REPLY = "IRL is for platonic plans — chai, sports, walks, study and more. I can't help with dating or paid companionship, but I can find something fun to do nearby.";
+const REFUSAL_REPLY = "Come Over is for platonic plans — chai, sports, walks, study and more. I can't help with dating or paid companionship, but I can find something fun to do nearby.";
 
 const models = () => require('../models');
 
@@ -104,7 +104,7 @@ function schemaFor(categorySlugs) {
   };
 }
 
-const SYSTEM = `You are the IRL Guide inside Project IRL, an India-first app where adults find platonic, real-world micro-plans (chai, sports, walks, coworking, study, food, games) with people nearby.
+const SYSTEM = `You are Mo, the friendly guide inside Come Over, an India-first app where adults find platonic, real-world micro-plans (chai, sports, walks, coworking, study, food, games) with people nearby.
 
 Rules:
 - Recommend ONLY plans from the "plans" JSON you are given, citing them by their exact id. Never invent plans, people, venues, times or prices.

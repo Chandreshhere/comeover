@@ -1,15 +1,15 @@
-// business_profile — venue profile (GET /venues/{id}): member offers, public location, plans, booking.
+// business_profile — venue profile (GET /venues/{id}): member offer, public location, plans, booking.
 import React, { useMemo, useState } from 'react';
 import { Linking, RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { ActivityCard, AppText, Button, Card, EmptyState, ErrorState, Icon, IconButton, ListGroup, ListRow, Pictogram, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
-import { accents, colors, radius, space } from '@/theme/tokens';
+import { ActivityCard, AppText, Button, Card, ErrorState, Icon, IconBubble, IconButton, ListGroup, ListRow, QueryState, Screen, ScreenHeader, SectionHeader } from '@/components';
+import { colors, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
 import { useAppStore } from '@/store/useAppStore';
 import useRemote from '@/features/premium/useRemote';
 import { fetchVenue, plansForVenue } from './businessShared';
-import { SponsoredLabel, VerifiedBadge } from './components/VenueCard';
+import { SponsoredLabel, VerifiedBadge, venueTone } from './components/VenueCard';
 import SponsoredSheet from './components/SponsoredSheet';
 
 export default function BusinessProfileScreen() {
@@ -27,97 +27,89 @@ export default function BusinessProfileScreen() {
 
   if (!venue) {
     const notFound = venueQ.status === 'error' && (venueQ.errorObj?.status === 404 || !params.id);
+    const missing = <ErrorState kind="api" title="Venue not found" body="It may have been removed or is no longer a partner." onRetry={() => nav.navigate('business_discovery')} retryLabel="See partner places" />;
     return (
       <Screen header={<ScreenHeader title="Venue" />}>
         {notFound || !params.id ? (
-          <ErrorState kind="api" title="Venue not found" body="It may have been removed or is no longer a partner." onRetry={() => nav.navigate('business_discovery')} retryLabel="See partner places" />
+          missing
         ) : (
-          <QueryState status={venueQ.status} error={venueQ.error} hasData={false} onRetry={venueQ.reload} skeletonRows={3} skeletonHeight={140}>
-            <ErrorState kind="api" title="Venue not found" body="It may have been removed or is no longer a partner." onRetry={() => nav.navigate('business_discovery')} retryLabel="See partner places" />
+          <QueryState status={venueQ.status} error={venueQ.error} hasData={false} onRetry={venueQ.reload} skeletonRows={3} skeletonHeight={120} style={{ marginTop: space.xs }}>
+            {missing}
           </QueryState>
         )}
       </Screen>
     );
   }
 
-  const accent = accents[(venue.accentIndex || 0) % accents.length];
   const hostHere = () => nav.navigate('create_activity_type', { category: venue.categories[0], venueName: venue.name, area: venue.area });
   const openBooking = () => (venue.bookingUrl ? Linking.openURL(venue.bookingUrl).catch(() => setLinkError(true)) : setLinkError(true));
+  const visitRows = [
+    { key: 'loc', icon: 'map-pin', title: 'Public location', subtitle: venue.publicLocation || venue.area || 'Shared by the venue' },
+    venue.hours ? { key: 'hours', icon: 'clock', title: 'Hours', subtitle: venue.hours } : null,
+    venue.bookingUrl ? { key: 'book', icon: 'external-link', title: 'Booking & menu', subtitle: 'Opens the venue’s own page', onPress: openBooking } : null,
+  ].filter(Boolean);
 
   return (
     <Screen
       refreshControl={<RefreshControl refreshing={venueQ.refreshing} onRefresh={venueQ.reload} tintColor={colors.ink} />}
       header={
         <ScreenHeader
-          title={venue.name}
+          title="Venue"
           right={<IconButton icon="flag" accessibilityLabel="Report this venue" onPress={() => nav.navigate('report_flow', { venueId: venue.id, context: 'venue' })} />}
         />
       }
-      footer={
-        <View style={{ flexDirection: 'row', gap: space.xs }}>
-          {venue.bookingUrl ? <Button title="Book with venue" icon="external-link" variant="secondary" style={{ flex: 1 }} onPress={openBooking} /> : null}
-          <Button title="Host a plan here" style={{ flex: 1 }} onPress={hostHere} />
-        </View>
-      }
+      footer={<Button title="Host a plan here" icon="plus" onPress={hostHere} />}
     >
-      <Animated.View entering={enter(0)}>
-        <View style={{ backgroundColor: accent.bg, borderRadius: radius.hero, padding: space.lg, marginTop: space.xs, overflow: 'hidden' }}>
-          <View pointerEvents="none" style={{ position: 'absolute', right: -10, bottom: -10, opacity: 0.3, transform: [{ rotate: '-12deg' }] }}>
-            <Pictogram name={venue.pictogram} size={140} strokeWidth={1.2} />
-          </View>
-          {venue.sponsored && <SponsoredLabel onWhy={() => setWhy(venue)} style={{ marginBottom: space.sm }} />}
-          <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' }}>
-            <Pictogram name={venue.pictogram} size={32} color={colors.white} />
-          </View>
-          <AppText variant="h1" style={{ marginTop: space.md }} accessibilityRole="header">
-            {venue.name}
-          </AppText>
-          <AppText variant="label" color={colors.inkSoft}>
-            {[venue.kind, venue.area].filter(Boolean).join(' · ')}
-          </AppText>
-          <View style={{ marginTop: space.sm }}>
-            <VerifiedBadge verified={venue.verified} light />
-          </View>
-          {!!venue.about && (
-            <AppText color={colors.inkSoft} style={{ marginTop: space.sm, maxWidth: '85%' }}>
-              {venue.about}
+      {/* Identity */}
+      <Animated.View entering={enter(0)} style={{ marginTop: space.xs }}>
+        {venue.sponsored && <SponsoredLabel onWhy={() => setWhy(venue)} style={{ marginBottom: space.sm }} />}
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <IconBubble size={56} tone={venueTone(venue)} pictogram={venue.pictogram} iconSize={30} />
+          <View style={{ flex: 1, marginLeft: space.sm }}>
+            <AppText variant="h1" numberOfLines={2} accessibilityRole="header">
+              {venue.name}
             </AppText>
-          )}
+            <AppText variant="label" color={colors.muted} numberOfLines={1}>
+              {[venue.kind, venue.area].filter(Boolean).join(' · ')}
+            </AppText>
+          </View>
         </View>
+        <View style={{ marginTop: space.sm }}>
+          <VerifiedBadge verified={venue.verified} />
+        </View>
+        {!!venue.about && (
+          <AppText color={colors.inkSoft} style={{ marginTop: space.sm }}>
+            {venue.about}
+          </AppText>
+        )}
       </Animated.View>
 
-      {/* Offer */}
+      {/* Member offer */}
       {!!venue.offer && (
         <Animated.View entering={enter(1)}>
-          <Card bg={colors.ink} style={{ marginTop: space.md }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.orange, alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name="gift" size={18} />
-              </View>
-              <View style={{ flex: 1, marginLeft: space.sm }}>
-                <AppText variant="caption" color="rgba(255,255,255,0.7)">
-                  For IRL plan members
-                </AppText>
-                <AppText variant="bodyStrong" color={colors.white}>
-                  {venue.offer}
-                </AppText>
-              </View>
-            </View>
-            {!!venue.offerTerms && (
-              <AppText variant="caption" color="rgba(255,255,255,0.7)" style={{ marginTop: space.sm }}>
-                {venue.offerTerms}
+          <Card bg={colors.orangeSoft} elevated={false} style={{ marginTop: space.lg, flexDirection: 'row', alignItems: 'center' }}>
+            <IconBubble size={44} tone="surface" icon="gift" iconSize={22} duo={colors.orange} />
+            <View style={{ flex: 1, marginLeft: space.sm }}>
+              <AppText variant="caption" color={colors.inkSoft}>
+                Offer for Come Over plans
               </AppText>
-            )}
+              <AppText variant="bodyStrong">{venue.offer}</AppText>
+              {!!venue.offerTerms && (
+                <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.xxs }}>
+                  {venue.offerTerms}
+                </AppText>
+              )}
+            </View>
           </Card>
         </Animated.View>
       )}
 
-      {/* Info */}
+      {/* Visit */}
       <SectionHeader title="Visit" />
       <ListGroup>
-        <ListRow icon="map-pin" title="Public location" subtitle={venue.publicLocation || venue.area || 'Shared by the venue'} last={!venue.hours && !venue.bookingUrl} />
-        {!!venue.hours && <ListRow icon="clock" title="Hours" subtitle={venue.hours} last={!venue.bookingUrl} />}
-        {!!venue.bookingUrl && <ListRow icon="external-link" title="Booking & menu" subtitle="Opens the venue's own page" onPress={openBooking} last />}
+        {visitRows.map(({ key, ...row }, i) => (
+          <ListRow key={key} {...row} last={i === visitRows.length - 1} />
+        ))}
       </ListGroup>
       {linkError && (
         <AppText variant="caption" color={colors.danger} style={{ marginTop: space.xs }} accessibilityLiveRegion="polite">
@@ -126,7 +118,7 @@ export default function BusinessProfileScreen() {
       )}
 
       {/* Plans */}
-      <SectionHeader title={`Plans here · ${plans.length}`} />
+      <SectionHeader title={plans.length ? `Plans here · ${plans.length}` : 'Plans here'} />
       {plans.length ? (
         <View style={{ gap: space.sm }}>
           {plans.map((a, i) => (
@@ -134,13 +126,17 @@ export default function BusinessProfileScreen() {
           ))}
         </View>
       ) : (
-        <EmptyState compact title="No plans here yet" body={venue.offer ? "Start one — the venue's offer applies to your group." : 'Start one and invite people nearby.'} cta="Host a plan here" onCta={hostHere} />
+        <Card elevated={false} bg={colors.surfaceSubtle} style={{ alignItems: 'center' }}>
+          <AppText color={colors.muted} align="center">
+            No plans here yet. Be the first to host one.
+          </AppText>
+        </Card>
       )}
 
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: space.xl }}>
-        <Icon name="info" size={14} color={colors.muted} style={{ marginTop: 2 }} />
-        <AppText variant="caption" color={colors.muted} style={{ marginLeft: 6, flex: 1 }}>
-          Bookings and payments happen directly with the venue. Project IRL doesn't take payments for venues or guarantee availability.
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.xl }}>
+        <Icon name="info" size={14} color={colors.muted} />
+        <AppText variant="caption" color={colors.muted} style={{ marginLeft: space.xs, flex: 1 }}>
+          Booking, payment and availability are handled by the venue.
         </AppText>
       </View>
 

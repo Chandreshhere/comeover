@@ -2,32 +2,18 @@
 // Pins are ~1 km cluster centroids of *plans* (server already returns coarse
 // coordinates); no person is ever drawn on the map and the device location is
 // never shown to others (showsUserLocation off). Zooming re-queries the feed
-// with a matching radius (debounced).
+// with a matching radius (debounced). Distance itself lives in Filters.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, ScrollView, View, useWindowDimensions } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import {
-  ActivityCard,
-  AppText,
-  Button,
-  Card,
-  Chip,
-  ChipRow,
-  ErrorState,
-  Icon,
-  IconButton,
-  Pictogram,
-  QueryState,
-  Screen,
-  Segmented,
-} from '@/components';
+import { ActivityCard, AppText, Button, ErrorState, Icon, IconButton, Pictogram, QueryState, Screen, Segmented } from '@/components';
 import { areaCentroids, CITY_CENTER } from '@/data/catalog';
 import config from '@/config';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
-import { colors, layout, radius, shadow, space } from '@/theme/tokens';
+import { colors, fonts, isDark, layout, radius, shadow, space } from '@/theme/tokens';
 import useJoinAction from '@/features/plans/joinActions';
 import { applyFilters, clusterActivities, countActiveFilters, joinUiState, sortActivities, visibleActivities } from './utils';
 
@@ -39,15 +25,22 @@ const kmForDelta = (delta) => {
   return config.RADIUS_OPTIONS_KM.reduce((best, r) => (Math.abs(r - km) < Math.abs(best - km) ? r : best), config.RADIUS_OPTIONS_KM[0]);
 };
 
-// Soft, low-contrast basemap so pastel pins carry the hierarchy (Google provider only).
-const MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#F2F3F8' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#767985' }] },
+// Soft, low-contrast basemap so pastel pins carry the hierarchy (Google
+// provider only). A function: it reads the live light/dark palette.
+const mapStyle = () => [
+  { elementType: 'geometry', stylers: [{ color: colors.canvas }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: colors.muted }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: colors.canvas }] },
   { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#C8D7FF' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: colors.surface }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: colors.border }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: colors.periwinkleSoft }] },
   { featureType: 'transit', stylers: [{ visibility: 'off' }] },
 ];
+
+const PIN = 46;
+const PIN_SELECTED = 54;
+const PIN_PAD = 8; // room for the count badge inside the marker view (Android clips overflow)
 
 class MapBoundary extends React.Component {
   state = { failed: false };
@@ -56,34 +49,56 @@ class MapBoundary extends React.Component {
   }
   componentDidCatch(e) {
     // eslint-disable-next-line no-console
-    console.warn('[IRL] Map failed to render', e?.message);
+    console.warn('[ComeOver] Map failed to render', e?.message);
   }
   render() {
     return this.state.failed ? this.props.fallback : this.props.children;
   }
 }
 
+// Pins sit on the map, so their rings stay pure white in both schemes.
 function ClusterPin({ cluster, selected }) {
   const n = cluster.items.length;
+  const d = selected ? PIN_SELECTED : PIN;
   return (
-    <View style={{ alignItems: 'center' }}>
+    <View style={{ padding: PIN_PAD, alignItems: 'center', justifyContent: 'center' }}>
       <View
-        style={{
-          width: selected ? 54 : 46,
-          height: selected ? 54 : 46,
-          borderRadius: 27,
-          backgroundColor: selected ? colors.ink : colors.periwinkle,
-          borderWidth: 3,
-          borderColor: colors.white,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
+        style={[
+          {
+            width: d,
+            height: d,
+            borderRadius: d / 2,
+            backgroundColor: selected ? colors.ink : colors.periwinkle,
+            borderWidth: 3,
+            borderColor: colors.pureWhite,
+            alignItems: 'center',
+            justifyContent: 'center',
+          },
+          shadow.card,
+        ]}
       >
-        <Pictogram name={cluster.pictogram} size={selected ? 26 : 22} color={selected ? colors.white : colors.ink} />
+        <Pictogram name={cluster.pictogram} size={selected ? 28 : 24} color={selected ? colors.white : colors.ink} duotoneOpacity={0.35} />
       </View>
       {n > 1 && (
-        <View style={{ position: 'absolute', top: -4, right: -6, minWidth: 22, height: 22, borderRadius: 11, backgroundColor: colors.orange, borderWidth: 2, borderColor: colors.white, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 }}>
-          <AppText variant="caption">{n}</AppText>
+        <View
+          style={{
+            position: 'absolute',
+            top: 2,
+            right: 0,
+            minWidth: 22,
+            height: 22,
+            borderRadius: 11,
+            backgroundColor: colors.orange,
+            borderWidth: 2,
+            borderColor: colors.pureWhite,
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: space.xxs,
+          }}
+        >
+          <AppText variant="caption" style={{ fontFamily: fonts.bold }} maxScale={1}>
+            {n}
+          </AppText>
         </View>
       )}
     </View>
@@ -178,22 +193,14 @@ export default function MapDiscoveryScreen() {
         <Segmented options={[{ value: 'map', label: 'Map' }, { value: 'list', label: 'List' }]} value={mode} onChange={setMode} style={{ flex: 1 }} />
         <IconButton icon="sliders" variant={filterCount ? 'ink' : 'surface'} badge={filterCount > 0} accessibilityLabel="Filters" onPress={() => nav.navigate('filters_sheet')} />
       </View>
-      <View style={{ paddingBottom: space.xs }}>
-        <ChipRow>
-          {config.RADIUS_OPTIONS_KM.map((r) => (
-            <Chip key={r} label={`${r} km`} icon="target" selected={km === r} onPress={() => setRadius(r)} />
-          ))}
-        </ChipRow>
-      </View>
-
       {locationPref === 'denied' && (
-        <Card padding={12} style={{ marginHorizontal: layout.screenPadding, marginBottom: space.xs, flexDirection: 'row', alignItems: 'center' }}>
-          <Icon name="map-pin" size={18} />
-          <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginHorizontal: space.xs }}>
-            Location is off — showing plans around {area}. Distances are from your chosen area.
+        <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, marginHorizontal: layout.screenPadding, marginBottom: space.xs }}>
+          <Icon name="map-pin" size={16} color={colors.muted} />
+          <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginHorizontal: space.xs }} numberOfLines={2}>
+            Location is off. Showing plans around {area}.
           </AppText>
-          <Button title="Keep area" size="xs" full={false} variant="secondary" onPress={() => setPrefs({ location: 'manual' })} />
-        </Card>
+          <Button title="OK" size="xs" full={false} variant="secondary" accessibilityLabel={`Keep using ${area}`} onPress={() => setPrefs({ location: 'manual' })} />
+        </View>
       )}
 
       {mode === 'map' ? (
@@ -205,7 +212,8 @@ export default function MapDiscoveryScreen() {
               <MapView
                 style={{ flex: 1 }}
                 provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-                customMapStyle={Platform.OS === 'android' ? MAP_STYLE : undefined}
+                customMapStyle={Platform.OS === 'android' ? mapStyle() : undefined}
+                userInterfaceStyle={isDark() ? 'dark' : 'light'}
                 ref={mapRef}
                 initialRegion={{ latitude: center.latitude, longitude: center.longitude, latitudeDelta: delta, longitudeDelta: delta }}
                 showsUserLocation={false}
@@ -235,16 +243,21 @@ export default function MapDiscoveryScreen() {
           )}
 
           {/* Legend */}
-          <View style={[{ position: 'absolute', top: space.sm, left: space.sm, backgroundColor: colors.surface, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center' }, shadow.card]}>
-            {feed.status === 'loading' ? <ActivityIndicator size="small" color={colors.deep} /> : <Icon name="shield" size={13} color={colors.success} />}
-            <AppText variant="caption" style={{ marginLeft: 6 }}>
-              {feed.status === 'loading' && !list.length ? 'Finding plans…' : `${list.length} plans · approximate areas only`}
+          <View
+            style={[
+              { position: 'absolute', top: space.sm, left: space.sm, maxWidth: width - layout.screenPadding * 2, minHeight: 32, backgroundColor: colors.surface, borderRadius: radius.pill, paddingHorizontal: space.sm, paddingVertical: 6, flexDirection: 'row', alignItems: 'center' },
+              shadow.card,
+            ]}
+          >
+            {feed.status === 'loading' ? <ActivityIndicator size="small" color={colors.deep} /> : <Icon name="shield" size={14} color={colors.success} weight="fill" />}
+            <AppText variant="caption" style={{ marginLeft: 6, flexShrink: 1 }} numberOfLines={1}>
+              {feed.status === 'loading' && !list.length ? 'Finding plans…' : `${list.length} plan${list.length === 1 ? '' : 's'} · approximate areas`}
             </AppText>
           </View>
           {feed.status === 'error' && (
-            <View style={[{ position: 'absolute', top: 52, left: space.sm, right: space.sm, backgroundColor: colors.surface, borderRadius: radius.quest, padding: space.sm, flexDirection: 'row', alignItems: 'center' }, shadow.card]}>
-              <Icon name="wifi-off" size={15} />
-              <AppText variant="caption" style={{ flex: 1, marginLeft: 6 }}>
+            <View style={[{ position: 'absolute', top: space.sm + 32 + space.xs, left: space.sm, right: space.sm, backgroundColor: colors.surface, borderRadius: radius.quest, padding: space.sm, flexDirection: 'row', alignItems: 'center' }, shadow.card]}>
+              <Icon name="wifi-off" size={16} color={colors.danger} />
+              <AppText variant="caption" style={{ flex: 1, marginHorizontal: space.xs }} numberOfLines={2}>
                 {feed.error || 'Couldn’t refresh plans.'}
               </AppText>
               <Button title="Retry" size="xs" full={false} variant="secondary" onPress={feed.reload} />
@@ -274,15 +287,7 @@ export default function MapDiscoveryScreen() {
                 />
               ))}
             </ScrollView>
-          ) : (
-            <View style={{ position: 'absolute', bottom: insets.bottom + space.md, alignSelf: 'center' }}>
-              <View style={[{ backgroundColor: colors.ink, borderRadius: radius.pill, paddingHorizontal: 16, paddingVertical: 10 }, shadow.floating]}>
-                <AppText variant="label" color={colors.white}>
-                  Tap a pin to see plans
-                </AppText>
-              </View>
-            </View>
-          )}
+          ) : null}
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ paddingHorizontal: layout.screenPadding, paddingBottom: insets.bottom + space.xl, gap: space.sm }} showsVerticalScrollIndicator={false}>
@@ -293,11 +298,9 @@ export default function MapDiscoveryScreen() {
             onRetry={feed.reload}
             empty={{
               title: 'Nothing in this radius',
-              body: 'Widen the distance or clear filters.',
+              body: 'Try a wider distance.',
               cta: `Search ${config.RADIUS_OPTIONS_KM[config.RADIUS_OPTIONS_KM.length - 1]} km`,
               onCta: () => setRadius(config.RADIUS_OPTIONS_KM[config.RADIUS_OPTIONS_KM.length - 1]),
-              secondary: 'Start a plan',
-              onSecondary: () => nav.navigate('create_activity_type'),
             }}
           >
             {sortActivities(list, 'nearest').map((a, i) => (

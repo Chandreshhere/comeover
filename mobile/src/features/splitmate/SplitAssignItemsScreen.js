@@ -1,12 +1,12 @@
-// split_assign_items — tap who had what; tax/tip split in proportion.
+// split_assign_items — live per-person totals, then tap who had what on each
+// item; tax/tip split in proportion.
 import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { AppText, Button, Card, EmptyState, IconButton, Screen, ScreenHeader, SectionHeader, TextField } from '@/components';
+import { AppText, Button, Card, ChipGrid, IconButton, Screen, ScreenHeader, SectionHeader, TextField } from '@/components';
 import { colors, space } from '@/theme/tokens';
-import { inr } from '@/utils/format';
-import { itemisedBreakdown, itemsSubtotal, localId, nameOf, newDraft, toMinor } from './lib/split';
-import { LedgerNote, PersonAvatar, PersonToggle, Steps } from './components/SplitBits';
+import { itemisedBreakdown, itemsSubtotal, localId, money, nameOf, newDraft, toMinor } from './lib/split';
+import { Hint, PersonAvatar, PersonToggle, useKnownPeople } from './components/SplitBits';
 
 export default function SplitAssignItemsScreen() {
   const nav = useNavigation();
@@ -16,6 +16,7 @@ export default function SplitAssignItemsScreen() {
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [touched, setTouched] = useState(false);
+  useKnownPeople(base.participants);
 
   const draft = useMemo(() => ({ ...base, method: 'itemised', items }), [base, items]);
   const breakdown = useMemo(() => itemisedBreakdown(draft), [draft]);
@@ -52,74 +53,90 @@ export default function SplitAssignItemsScreen() {
     <Screen
       keyboard
       header={<ScreenHeader title="Who had what?" subtitle="Step 2 of 3" right={<IconButton icon="camera" accessibilityLabel="Scan or edit bill" onPress={() => nav.navigate('split_bill_scan', { draft })} />} />}
-      footer={<Button title={`Review ${inr(total)}`} iconRight="arrow-right" onPress={next} disabled={touched && (!items.length || unassigned.length > 0)} />}
+      footer={<Button title={items.length ? `Review ${money(total)}` : 'Review split'} iconRight="arrow-right" onPress={next} disabled={touched && (!items.length || unassigned.length > 0)} />}
     >
-      <Steps step={2} />
-
       {/* Live per-person totals */}
-      <Card bg={colors.periwinkle} elevated={false}>
-        <AppText variant="label" color={colors.inkSoft}>
-          Running totals · {inr(total)}
-          {extras ? ` incl. ${inr(extras)} tax/tip` : ''}
-        </AppText>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: space.xs }}>
+      <Card style={{ marginTop: space.xs }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <AppText variant="h3" style={{ flex: 1 }}>
+            Per person
+          </AppText>
+          <AppText variant="h3">{money(total)}</AppText>
+        </View>
+        {extras ? (
+          <AppText variant="caption" color={colors.muted} style={{ marginTop: 2 }}>
+            Includes {money(extras)} tax and tip, shared in proportion
+          </AppText>
+        ) : null}
+        <ChipGrid columns={2} gap={space.sm} style={{ marginTop: space.sm }}>
           {breakdown.map((b) => (
-            <View key={b.userId} style={{ width: '50%', flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }} accessible accessibilityLabel={`${nameOf(b.userId)} ${inr(b.amountMinor)}`}>
-              <PersonAvatar id={b.userId} size={28} />
-              <View style={{ marginLeft: 8 }}>
-                <AppText variant="caption" color={colors.inkSoft}>
+            <View key={b.userId} style={{ flexDirection: 'row', alignItems: 'center' }} accessible accessibilityLabel={`${nameOf(b.userId)} ${money(b.amountMinor)}`}>
+              <PersonAvatar id={b.userId} size={32} />
+              <View style={{ marginLeft: space.xs, flex: 1 }}>
+                <AppText variant="caption" color={colors.inkSoft} numberOfLines={1}>
                   {nameOf(b.userId)}
                 </AppText>
-                <AppText variant="bodyStrong">{inr(b.amountMinor)}</AppText>
+                <AppText variant="bodyStrong" numberOfLines={1}>
+                  {money(b.amountMinor)}
+                </AppText>
               </View>
             </View>
           ))}
-        </View>
+        </ChipGrid>
       </Card>
 
-      <SectionHeader title={`Items (${items.length})`} right={<AppText variant="label" color={colors.muted}>{inr(subtotal)}</AppText>} />
+      {/* Items */}
+      <SectionHeader title={`Items (${items.length})`} right={<AppText variant="label" color={colors.muted}>{money(subtotal)}</AppText>} />
       {items.length === 0 ? (
-        <EmptyState compact title="No items yet" body="Add what was ordered below, or scan the bill for reference." cta="Scan bill" onCta={() => nav.navigate('split_bill_scan', { draft })} />
+        <AppText color={colors.muted}>No items yet. Add one below.</AppText>
       ) : (
         <View style={{ gap: space.sm }}>
           {items.map((it) => {
             const missing = !it.assignees.some((a) => base.participants.includes(a));
+            const all = it.assignees.length === base.participants.length;
             return (
-              <Card key={it.id} style={missing && touched ? { borderWidth: 1.5, borderColor: colors.danger } : null}>
+              <Card key={it.id} style={missing ? { borderWidth: 1.5, borderColor: touched ? colors.danger : colors.warning } : null}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <View style={{ flex: 1 }}>
                     <AppText variant="bodyStrong" numberOfLines={1}>
                       {it.name}
                     </AppText>
-                    <AppText variant="caption" color={missing ? colors.danger : colors.muted}>
-                      {missing ? 'Tap at least one person' : it.assignees.length === base.participants.length ? 'Shared by everyone' : `Split ${it.assignees.length} way${it.assignees.length > 1 ? 's' : ''}`}
+                    <AppText variant="caption" color={missing && touched ? colors.danger : colors.muted}>
+                      {missing ? 'Tap at least one person' : all ? 'Shared by everyone' : `Split ${it.assignees.length} way${it.assignees.length > 1 ? 's' : ''}`}
                     </AppText>
                   </View>
-                  <AppText variant="h3">{inr(it.amountMinor)}</AppText>
-                  <IconButton icon="trash-2" variant="plain" size={36} accessibilityLabel={`Remove ${it.name}`} onPress={() => remove(it.id)} />
+                  <AppText variant="h3" style={{ marginLeft: space.xs }}>
+                    {money(it.amountMinor)}
+                  </AppText>
+                  <IconButton icon="trash-2" variant="plain" size={40} accessibilityLabel={`Remove ${it.name}`} onPress={() => remove(it.id)} style={{ marginLeft: space.xxs, marginRight: -space.xs }} />
                 </View>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.sm }}>
+                <ChipGrid columns={2} style={{ marginTop: space.sm }}>
                   {base.participants.map((id) => (
-                    <PersonToggle key={id} id={id} size="sm" name={nameOf(id)} selected={it.assignees.includes(id)} onPress={() => toggle(it.id, id)} />
+                    <PersonToggle key={id} id={id} size="sm" name={nameOf(id)} fill selected={it.assignees.includes(id)} onPress={() => toggle(it.id, id)} />
                   ))}
-                  {it.assignees.length !== base.participants.length && (
-                    <Button title="Everyone" size="xs" variant="ghost" full={false} onPress={() => everyone(it.id)} />
-                  )}
-                </View>
+                </ChipGrid>
+                {!all && (
+                  <AppText variant="label" color={colors.deep} onPress={() => everyone(it.id)} accessibilityRole="button" suppressHighlighting style={{ marginTop: space.sm, alignSelf: 'flex-start' }}>
+                    Select everyone
+                  </AppText>
+                )}
               </Card>
             );
           })}
         </View>
       )}
 
+      {touched && unassigned.length > 0 ? (
+        <Hint tone="warn" style={{ marginTop: space.sm }} title={`${unassigned.length} item${unassigned.length > 1 ? 's need' : ' needs'} someone`} body="Tap at least one person on each highlighted item." />
+      ) : null}
+
+      {/* Add */}
       <SectionHeader title="Add an item" />
       <View style={{ flexDirection: 'row', gap: space.xs, alignItems: 'flex-start' }}>
-        <TextField style={{ flex: 1.6 }} value={name} onChangeText={setName} placeholder="e.g. Pav bhaji" />
-        <TextField style={{ flex: 1 }} value={amount} onChangeText={(t) => setAmount(t.replace(/[^0-9.]/g, ''))} placeholder="₹ 0" keyboardType="decimal-pad" onSubmitEditing={add} />
+        <TextField style={{ flex: 1.5, marginBottom: 0 }} value={name} onChangeText={setName} placeholder="e.g. Pav bhaji" accessibilityLabel="Item name" />
+        <TextField style={{ flex: 1, marginBottom: 0 }} value={amount} onChangeText={(t) => setAmount(t.replace(/[^0-9.]/g, ''))} placeholder="₹ 0" keyboardType="decimal-pad" returnKeyType="done" onSubmitEditing={add} accessibilityLabel="Item price in rupees" />
         <IconButton icon="plus" variant="ink" size={52} accessibilityLabel="Add item" onPress={add} />
       </View>
-
-      <LedgerNote style={{ marginTop: space.md }} text="Tax and tip are shared in proportion to what each person had, rounded to the paisa so it always adds up." />
     </Screen>
   );
 }

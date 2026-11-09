@@ -1,26 +1,64 @@
 // daily_challenges — Daily / Weekly quests with available → started →
-// completed → claimed (or expired) states and claim celebration.
+// completed → claimed (or expired) states and claim celebration. The rules
+// for what earns XP sit behind one "How XP works" row.
 import React, { useMemo, useState } from 'react';
 import { RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { AppText, Card, EmptyState, Icon, Pictogram, ProgressBar, QueryState, Screen, ScreenHeader, SectionHeader, Segmented } from '@/components';
+import { AppText, Card, EmptyState, Icon, IconBubble, ProgressBar, QueryState, Screen, ScreenHeader, Segmented } from '@/components';
 import { colors, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
 import { useAppStore } from '@/store/useAppStore';
 import useLoader from '@/hooks/useLoader';
 import AnimatedQuestCard from './components/AnimatedQuestCard';
-import { ActionError, BurstHeader, FairPlayNote, dailyCapOf } from './components/progressShared';
+import { ActionError, BurstHeader, Disclosure, dailyCapOf } from './components/progressShared';
 
 const COUNTS = [
-  { pictogram: 'check', text: 'A plan completed and confirmed by the host + one attendee' },
-  { pictogram: 'people', text: 'A verified group check-in at the venue' },
-  { pictogram: 'sparkle', text: 'Trying a category you haven’t done before' },
-  { pictogram: 'star', text: 'Hosting a plan that happens without late cancellation' },
+  { pictogram: 'check', tone: 'mint', text: 'A plan confirmed by the host and one guest' },
+  { pictogram: 'people', tone: 'periwinkle', text: 'A verified group check-in at the venue' },
+  { pictogram: 'sparkle', tone: 'orange', text: 'Trying a new kind of activity' },
+  { pictogram: 'star', tone: 'pink', text: 'Hosting a plan with no late cancellation' },
 ];
-const NEVER = ['Swipes or likes', 'Message volume', 'Joining without attending', 'Duplicate plans'];
+const NEVER = ['Swipes or likes', 'Message volume', 'Joining without going', 'Duplicate plans'];
 
 const STATE_ORDER = { completed: 0, started: 1, available: 2, claimed: 3, expired: 4 };
+
+function HowXpWorks({ cap }) {
+  return (
+    <Disclosure title="How XP works" style={{ marginTop: space.xl }}>
+      <View style={{ gap: space.xs }}>
+        {COUNTS.map((c) => (
+          <View key={c.text} style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <IconBubble size={36} tone={c.tone} pictogram={c.pictogram} iconSize={18} />
+            <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.sm }}>
+              {c.text}
+            </AppText>
+          </View>
+        ))}
+      </View>
+      <AppText variant="label" color={colors.muted} style={{ marginTop: space.md, marginBottom: space.xs }}>
+        Never counts
+      </AppText>
+      <View style={{ gap: space.xs }}>
+        {[0, 2].map((r) => (
+          <View key={r} style={{ flexDirection: 'row', gap: space.xs }}>
+            {NEVER.slice(r, r + 2).map((n) => (
+              <View key={n} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+                <Icon name="x" size={12} color={colors.muted} />
+                <AppText variant="caption" color={colors.muted} numberOfLines={1} style={{ flex: 1, marginLeft: space.xxs }}>
+                  {n}
+                </AppText>
+              </View>
+            ))}
+          </View>
+        ))}
+      </View>
+      <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.md }}>
+        Up to {cap} XP a day. Repeat actions on the same plan count once.
+      </AppText>
+    </Disclosure>
+  );
+}
 
 export default function DailyChallengesScreen() {
   const nav = useNavigation();
@@ -51,37 +89,26 @@ export default function DailyChallengesScreen() {
         </BurstHeader>
       }
     >
-      <Segmented options={[{ value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' }]} value={tab} onChange={setTab} />
+      <Segmented options={[{ value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' }]} value={tab} onChange={setTab} style={{ marginTop: space.xs }} />
 
-      <Card style={{ marginTop: space.md }}>
+      <Card style={{ marginTop: space.md }} elevated={false}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <View style={{ flex: 1 }}>
-            <AppText variant="caption" color={colors.muted}>
-              {tab === 'daily' ? 'Today' : 'This week'}
-            </AppText>
-            <AppText variant="h2">
-              {doneCount}/{list.length} done
-            </AppText>
-          </View>
+          <AppText variant="h3" style={{ flex: 1 }}>
+            {doneCount}/{list.length} done
+          </AppText>
           {tab === 'daily' ? (
-            <View style={{ alignItems: 'flex-end' }}>
-              <AppText variant="caption" color={colors.muted}>
-                XP claimed today
-              </AppText>
-              <AppText variant="bodyStrong">
-                {claimedDailyXp}/{cap}
-              </AppText>
-            </View>
+            <AppText variant="label" color={colors.inkSoft}>
+              {claimedDailyXp}/{cap} XP today
+            </AppText>
           ) : null}
         </View>
         <ProgressBar value={list.length ? doneCount / list.length : 0} style={{ marginTop: space.sm }} accessibilityLabel="Challenges done" />
       </Card>
 
-      <SectionHeader title={tab === 'daily' ? 'Daily quests' : 'Weekly quests'} />
-      <ActionError message={actionError} onDismiss={() => setActionError(null)} style={{ marginTop: 0, marginBottom: space.sm }} />
-      <QueryState status={questsL.status} error={questsL.error} hasData={quests.length > 0} onRetry={questsL.reload} skeletonRows={3} skeletonHeight={66}>
+      <ActionError message={actionError} onDismiss={() => setActionError(null)} style={{ marginTop: space.md }} />
+      <QueryState status={questsL.status} error={questsL.error} hasData={quests.length > 0} onRetry={questsL.reload} skeletonRows={3} skeletonHeight={66} style={{ marginTop: space.md }}>
         {list.length ? (
-          <View style={{ gap: space.xs }}>
+          <View style={{ gap: space.xs, marginTop: space.md }}>
             {list.map((q, i) => (
               <Animated.View key={q.id} entering={enter(i)}>
                 <AnimatedQuestCard
@@ -99,39 +126,11 @@ export default function DailyChallengesScreen() {
             ))}
           </View>
         ) : (
-          <EmptyState compact title="No quests right now" body="New quests show up as you join plans. Rest days are part of the game." cta="Find a plan" onCta={() => nav.navigate('main', { screen: 'discover_home' })} />
+          <EmptyState compact title="No quests right now" body="New quests show up as you join plans." cta="Find a plan" onCta={() => nav.navigate('main', { screen: 'discover_home' })} />
         )}
       </QueryState>
 
-      <SectionHeader title="What counts" />
-      <Card>
-        {COUNTS.map((c) => (
-          <View key={c.text} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
-            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: colors.periwinkleWash, alignItems: 'center', justifyContent: 'center' }}>
-              <Pictogram name={c.pictogram} size={18} />
-            </View>
-            <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.sm }}>
-              {c.text}
-            </AppText>
-          </View>
-        ))}
-        <View style={{ height: 1, backgroundColor: colors.border, marginVertical: space.xs }} />
-        <AppText variant="label" color={colors.muted}>
-          Never counts
-        </AppText>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-          {NEVER.map((n) => (
-            <View key={n} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceSubtle, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
-              <Icon name="x" size={11} color={colors.muted} />
-              <AppText variant="caption" color={colors.muted} style={{ marginLeft: 4 }}>
-                {n}
-              </AppText>
-            </View>
-          ))}
-        </View>
-      </Card>
-
-      <FairPlayNote style={{ marginTop: space.md }} cap={cap} />
+      <HowXpWorks cap={cap} />
     </Screen>
   );
 }

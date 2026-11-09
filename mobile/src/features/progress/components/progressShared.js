@@ -1,5 +1,5 @@
 // Shared constants/helpers for progress screens.
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { AppText, Icon } from '@/components';
 import { colors, radius, space } from '@/theme/tokens';
@@ -10,13 +10,25 @@ import XpBurst from './XpBurst';
 export const DAILY_XP_CAP = 200;
 export const dailyCapOf = (progress) => progress?.dailyXpCap ?? DAILY_XP_CAP;
 
-export function FairPlayNote({ style, cap = DAILY_XP_CAP }) {
+// Collapsed-by-default row that reveals details (rules, fine print) on tap.
+export function Disclosure({ title, icon = 'info', children, style }) {
+  const [open, setOpen] = useState(false);
   return (
-    <View style={[{ flexDirection: 'row', backgroundColor: colors.surfaceSubtle, borderRadius: radius.quest, padding: space.md, borderWidth: 1, borderColor: colors.border }, style]}>
-      <Icon name="info" size={16} color={colors.inkSoft} style={{ marginTop: 1 }} />
-      <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.xs }}>
-        Quests only count verified meetups — confirmed by the host and at least one attendee, or a group check-in. Swipes, likes and message counts never earn XP. XP is capped at {cap} a day and repeat actions on the same plan only count once.
-      </AppText>
+    <View style={[{ backgroundColor: colors.surface, borderRadius: radius.card, paddingHorizontal: space.md }, style]}>
+      <Pressable
+        onPress={() => setOpen((o) => !o)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={title}
+        style={{ flexDirection: 'row', alignItems: 'center', minHeight: 56 }}
+      >
+        <Icon name={icon} size={20} color={colors.inkSoft} weight="duotone" />
+        <AppText variant="bodyStrong" style={{ flex: 1, marginLeft: space.sm }}>
+          {title}
+        </AppText>
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={18} color={colors.muted} />
+      </Pressable>
+      {open ? <View style={{ paddingBottom: space.md }}>{children}</View> : null}
     </View>
   );
 }

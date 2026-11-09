@@ -1,9 +1,10 @@
-// achievement_detail — badge criteria and earned evidence / progress.
+// achievement_detail — the badge, how to earn it (with progress or evidence)
+// and a short list of ways to make progress.
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { AppText, Card, EmptyState, ListGroup, ListRow, Pictogram, PictogramCluster, ProgressBar, QueryState, Screen, ScreenHeader, SectionHeader, Tag } from '@/components';
+import { AppText, Card, EmptyState, Icon, ListGroup, ListRow, Pictogram, ProgressBar, ProgressRing, QueryState, Screen, ScreenHeader, SectionHeader, Tag } from '@/components';
 import { colors, space } from '@/theme/tokens';
 import { enter } from '@/theme/motion';
 import { useAppStore } from '@/store/useAppStore';
@@ -20,6 +21,8 @@ const helpFor = (a) => ({
   host: a.kind === 'host',
   note: a.hint || null,
 });
+
+const MEDAL = 128;
 
 const fmtDate = (iso) => {
   const d = new Date(iso);
@@ -46,29 +49,31 @@ export default function AchievementDetailScreen() {
   const help = helpFor(a);
   const cat = help.category ? categoryBySlug[help.category] : null;
   const bg = a.earned ? badgeColor(a.color) : colors.surfaceSubtle;
+  const total = Number(a.total) || 0;
+  const prog = Math.min(Number(a.progress) || 0, total);
 
   return (
-    <Screen bg={a.earned ? colors.periwinkle : colors.canvas} header={<ScreenHeader title="Badge" variant={a.earned ? 'glass' : 'surface'} />}>
+    <Screen header={<ScreenHeader title="Badge" />}>
       <Animated.View entering={enter(0)} style={{ alignItems: 'center', marginTop: space.md }}>
-        <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-          {a.earned && (
-            <View style={{ position: 'absolute', top: -20 }}>
-              <PictogramCluster width={300} height={90} color="rgba(9,10,14,0.5)" />
+        <View style={{ width: MEDAL + 20, height: MEDAL + 20, alignItems: 'center', justifyContent: 'center' }}>
+          {!a.earned && total > 0 ? (
+            <View style={{ position: 'absolute' }}>
+              <ProgressRing value={prog / total} size={MEDAL + 20} stroke={6} color={colors.deep} track={colors.track} />
             </View>
-          )}
-          <View style={{ width: 150, height: 150, borderRadius: 75, backgroundColor: bg, borderWidth: 5, borderColor: a.earned ? colors.ink : colors.border, alignItems: 'center', justifyContent: 'center', marginTop: space.lg }}>
-            <Pictogram name={a.pictogram} size={72} color={a.earned ? colors.ink : colors.muted} />
+          ) : null}
+          <View style={{ width: MEDAL, height: MEDAL, borderRadius: MEDAL / 2, backgroundColor: bg, borderWidth: a.earned ? 4 : 2, borderColor: a.earned ? colors.ink : colors.border, alignItems: 'center', justifyContent: 'center' }}>
+            <Pictogram name={a.pictogram} size={Math.round(MEDAL * 0.46)} color={a.earned ? colors.ink : colors.muted} />
           </View>
         </View>
-        <AppText variant="display" align="center" style={{ marginTop: space.lg }} accessibilityRole="header">
+        <AppText variant="h1" align="center" style={{ marginTop: space.md }} accessibilityRole="header">
           {a.title}
         </AppText>
         <Tag
           style={{ alignSelf: 'center', marginTop: space.xs }}
-          label={a.earned ? `Earned ${a.earnedAt ? fmtDate(a.earnedAt) : ''}` : `In progress · ${a.progress || 0}/${a.total}`}
-          icon={a.earned ? 'check' : 'clock'}
-          bg={a.earned ? colors.ink : colors.surface}
-          fg={a.earned ? colors.white : colors.inkSoft}
+          label={a.earned ? (a.earnedAt ? `Earned ${fmtDate(a.earnedAt)}` : 'Earned') : total ? `In progress · ${prog}/${total}` : 'Not earned yet'}
+          icon={a.earned ? 'check' : 'lock'}
+          bg={a.earned ? colors.mint : colors.surface}
+          fg={colors.ink}
         />
       </Animated.View>
 
@@ -76,13 +81,21 @@ export default function AchievementDetailScreen() {
         <SectionHeader title="How to earn it" />
         <Card>
           <AppText>{a.criteria}</AppText>
-          {!a.earned && a.total ? (
+          {!a.earned && total ? (
             <>
-              <ProgressBar value={(a.progress || 0) / a.total} style={{ marginTop: space.md }} accessibilityLabel={`${a.progress || 0} of ${a.total}`} />
-              <AppText variant="caption" color={colors.muted} style={{ marginTop: 6 }}>
-                {a.total - (a.progress || 0)} more to go
+              <ProgressBar value={prog / total} style={{ marginTop: space.md }} accessibilityLabel={`${prog} of ${total}`} />
+              <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.xs }}>
+                {prog}/{total} · {total - prog} more to go
               </AppText>
             </>
+          ) : null}
+          {a.earned ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space.sm }}>
+              <Icon name="shield" size={16} color={colors.success} weight="duotone" />
+              <AppText variant="caption" color={colors.inkSoft} style={{ flex: 1, marginLeft: space.xs }}>
+                From {a.evidence || 'verified meetups'}, confirmed by the host and a guest
+              </AppText>
+            </View>
           ) : null}
           {help.note ? (
             <AppText variant="caption" color={colors.inkSoft} style={{ marginTop: space.sm }}>
@@ -92,29 +105,12 @@ export default function AchievementDetailScreen() {
         </Card>
       </Animated.View>
 
-      {a.earned && (
-        <Animated.View entering={enter(2)}>
-          <SectionHeader title="Earned from" />
-          <Card style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' }}>
-              <Pictogram name="shield" size={22} />
-            </View>
-            <View style={{ flex: 1, marginLeft: space.sm }}>
-              <AppText variant="bodyStrong">{a.evidence || 'Verified meetups'}</AppText>
-              <AppText variant="caption" color={colors.muted}>
-                Verified by host + attendee confirmation
-              </AppText>
-            </View>
-          </Card>
-        </Animated.View>
-      )}
-
-      <SectionHeader title={a.earned ? 'Keep it going' : 'Ways to make progress'} />
+      <SectionHeader title={a.earned ? 'Keep it going' : 'Make progress'} />
       <ListGroup>
         {cat && <ListRow icon="search" title={`Find a ${cat.short.toLowerCase()} plan`} subtitle="Nearby, starting soon" onPress={() => nav.navigate('category_results', { category: cat.slug })} />}
-        {help.explore && <ListRow icon="compass" title="Try something new" subtitle="Browse categories you haven’t done" onPress={() => nav.navigate('discover_search')} />}
-        {help.host && <ListRow icon="plus-circle" title="Host a micro-plan" subtitle="Takes under a minute" onPress={() => nav.navigate('create_activity_type')} />}
-        <ListRow icon="message-circle" title="Ask the IRL Guide" subtitle="Get ideas that fit your time" onPress={() => nav.navigate('plan_assistant')} />
+        {help.explore && <ListRow icon="compass" title="Try something new" subtitle="Categories you haven’t done" onPress={() => nav.navigate('discover_search')} />}
+        {help.host && <ListRow icon="plus-circle" title="Host a plan" subtitle="Takes under a minute" onPress={() => nav.navigate('create_activity_type')} />}
+        <ListRow icon="message-circle" title="Ask Mo for ideas" onPress={() => nav.navigate('plan_assistant')} />
         <ListRow icon="award" title="All achievements" onPress={() => nav.navigate('achievements')} last />
       </ListGroup>
     </Screen>

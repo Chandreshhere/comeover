@@ -1,76 +1,108 @@
-// intent_picker — why and when the user wants to connect.
+// intent_picker — one question per screen:
+//   1. "What brings you here?" (required, saves profile.intents), then
+//   2. "When are you free?"    (optional, saves profile.availabilityWindows).
+// Part 2 is the same route pushed with { part: 'when' }, so the system back
+// gesture returns to part 1 and the onboarding route list stays unchanged.
 import React, { useState } from 'react';
-import { View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import { AppText, Button, Chip, OptionCard, Pictogram } from '@/components';
+import { useWindowDimensions } from 'react-native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { Button, Chip, ChipGrid } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
-import { colors, space } from '@/theme/tokens';
+import { layout, space } from '@/theme/tokens';
+import haptics from '@/utils/haptics';
 import OnboardingFrame from './components/OnboardingFrame';
+import OptionTile, { tileWidth } from './components/OptionTile';
 
 const WHY = [
-  { id: 'new_city', title: 'New to the city', subtitle: 'Low-pressure ways to meet people', pictogram: 'pin' },
-  { id: 'fitness', title: 'Fitness buddy', subtitle: 'Gym, runs, badminton — keep each other going', pictogram: 'gym' },
-  { id: 'quick_breaks', title: 'Quick breaks', subtitle: 'Chai or a walk between things', pictogram: 'chai' },
-  { id: 'weekend', title: 'Weekend plans', subtitle: 'Food walks, games, day trips', pictogram: 'sun' },
-  { id: 'hobbies', title: 'Hobby company', subtitle: 'Music, photos, board games', pictogram: 'music' },
-  { id: 'study_work', title: 'Study or cowork', subtitle: 'Focus sessions with others', pictogram: 'laptop' },
+  { id: 'new_city', label: 'New to the city', pictogram: 'pin' },
+  { id: 'fitness', label: 'Fitness buddy', pictogram: 'gym' },
+  { id: 'quick_breaks', label: 'Quick breaks', pictogram: 'chai' },
+  { id: 'weekend', label: 'Weekend plans', pictogram: 'sun' },
+  { id: 'hobbies', label: 'Hobby company', pictogram: 'music' },
+  { id: 'study_work', label: 'Study or cowork', pictogram: 'laptop' },
 ];
 
 const WHEN = [
-  { id: 'mornings', label: 'Mornings', icon: 'sunrise' },
-  { id: 'lunch', label: 'Lunch breaks', icon: 'coffee' },
+  { id: 'mornings', label: 'Mornings', icon: 'sun' },
+  { id: 'lunch', label: 'Lunch breaks', icon: 'ForkKnife' },
   { id: 'evenings', label: 'Evenings', icon: 'sunset' },
   { id: 'late', label: 'Late nights', icon: 'moon' },
-  { id: 'weekends', label: 'Weekends', icon: 'calendar' },
+  { id: 'weekends', label: 'Weekends', icon: 'party' },
 ];
+
+const COLS = 3;
+const GAP = space.xs;
 
 const toggle = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
 export default function IntentPickerScreen() {
   const nav = useNavigation();
+  const route = useRoute();
+  const { width } = useWindowDimensions();
   const profile = useAppStore((s) => s.profile);
   const setProfile = useAppStore((s) => s.setProfile);
+  const part = route.params?.part === 'when' ? 'when' : 'why';
   const [why, setWhy] = useState(profile.intents || []);
   const [when, setWhen] = useState(profile.availabilityWindows || []);
 
-  const next = () => {
-    setProfile({ intents: why, availabilityWindows: when });
-    nav.navigate('location_explainer');
-  };
+  if (part === 'when') {
+    return (
+      <OnboardingFrame
+        stepId="intent_picker"
+        title="When are you free?"
+        subtitle="Optional. We'll suggest plans at these times."
+        footer={
+          <Button
+            title="Continue"
+            onPress={() => {
+              setProfile({ availabilityWindows: when });
+              nav.navigate('location_explainer');
+            }}
+          />
+        }
+      >
+        <ChipGrid columns={2}>
+          {WHEN.map((w) => (
+            <Chip key={w.id} label={w.label} icon={w.icon} fill selected={when.includes(w.id)} onPress={() => setWhen((l) => toggle(l, w.id))} />
+          ))}
+        </ChipGrid>
+      </OnboardingFrame>
+    );
+  }
 
+  const tileW = tileWidth(width, COLS, GAP, layout.screenPadding);
   return (
     <OnboardingFrame
       stepId="intent_picker"
       title="What brings you here?"
-      subtitle="Pick any that fit. This shapes suggestions — never who can see you."
-      footer={<Button title="Continue" disabled={why.length === 0} onPress={next} />}
-    >
-      {WHY.map((w) => (
-        <OptionCard
-          key={w.id}
-          title={w.title}
-          subtitle={w.subtitle}
-          selected={why.includes(w.id)}
-          onPress={() => setWhy((l) => toggle(l, w.id))}
-          left={
-            <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: why.includes(w.id) ? colors.white : colors.periwinkleWash, alignItems: 'center', justifyContent: 'center' }}>
-              <Pictogram name={w.pictogram} size={24} />
-            </View>
-          }
+      subtitle="Pick any that fit. It shapes suggestions, never who sees you."
+      footer={
+        <Button
+          title="Continue"
+          disabled={why.length === 0}
+          onPress={() => {
+            setProfile({ intents: why });
+            nav.push('intent_picker', { part: 'when' });
+          }}
         />
-      ))}
-
-      <AppText variant="h3" style={{ marginTop: space.xl, marginBottom: space.sm }} accessibilityRole="header">
-        When are you usually free?
-      </AppText>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
-        {WHEN.map((w) => (
-          <Chip key={w.id} label={w.label} icon={w.icon} selected={when.includes(w.id)} onPress={() => setWhen((l) => toggle(l, w.id))} />
+      }
+    >
+      <ChipGrid columns={COLS} gap={GAP}>
+        {WHY.map((w, i) => (
+          <OptionTile
+            key={w.id}
+            label={w.label}
+            pictogram={w.pictogram}
+            index={i}
+            width={tileW}
+            selected={why.includes(w.id)}
+            onPress={() => {
+              haptics.select();
+              setWhy((l) => toggle(l, w.id));
+            }}
+          />
         ))}
-      </View>
-      <AppText variant="caption" color={colors.muted} style={{ marginTop: space.sm }}>
-        Optional. You can set "available now" any time from Discover.
-      </AppText>
+      </ChipGrid>
     </OnboardingFrame>
   );
 }

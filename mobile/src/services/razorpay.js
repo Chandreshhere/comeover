@@ -16,7 +16,7 @@ export async function payForBusinessPlan({ planId, venueId, contact, email, name
       order_id: order.orderId,
       amount: order.amount,
       currency: order.currency || 'INR',
-      name: 'Project IRL',
+      name: 'Come Over',
       description: order.description || 'Venue plan',
       prefill: { contact, email, name },
       theme: { color: colors.ink },

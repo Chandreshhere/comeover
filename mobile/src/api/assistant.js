@@ -1,4 +1,4 @@
-// IRL Guide — suggestions come from POST /assistant/suggest. The backend runs
+// Come Over Guide — suggestions come from POST /assistant/suggest. The backend runs
 // the LLM grounded on real nearby plans from the database, enforces the daily
 // quota and guardrails, and never invents plans or acts on the user's behalf.
 import { assistant } from './endpoints';
