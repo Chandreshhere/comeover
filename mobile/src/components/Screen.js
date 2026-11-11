@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, Platform, StatusBar, View } from 'react-native';
+import { useNavigationBar } from '@/services/systemBars';
 import Animated, { useAnimatedScrollHandler, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -68,6 +69,8 @@ export default function Screen({
   // it is up so the CTA sits just above the keys instead of floating high.
   const footerBottom = keyboard && keyboardUp ? space.sm : insets.bottom + space.sm;
   const barStyle = statusBar || (isDark() ? 'light-content' : 'dark-content');
+  // Android: the system navigation bar takes the screen colour, like iOS.
+  useNavigationBar(bg);
   const bottomPad = (tabBarSpace ? layout.bottomNavHeight + space.md : 0) + (footer ? 0 : insets.bottom + space.xl);
   const refreshing = !!refreshControl?.props?.refreshing;
   const yay = useRefreshYay(refreshing);

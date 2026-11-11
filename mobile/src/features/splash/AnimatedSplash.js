@@ -16,6 +16,7 @@ import { fonts, layout, type } from '@/theme/tokens';
 import haptics from '@/utils/haptics';
 import sfx from '@/services/sfx';
 import { markSplashDone } from './splashSignal';
+import { setNavigationBarOverride } from '@/services/systemBars';
 
 export const SPLASH_INK = '#0B0C12'; // keep in sync with LaunchScreen.storyboard and android colors.xml
 const PAPER = '#F4F5FA';
@@ -115,6 +116,7 @@ export default function AnimatedSplash({ ready, onDone }) {
     }
     played = true;
     statusEntry.current = StatusBar.pushStackEntry({ hidden: true, animated: true });
+    setNavigationBarOverride(SPLASH_INK); // Android: the bar follows the panels
     sfx.preload(['pop', 'chime', 'whoosh']);
     if (reduce) {
       setPhase('hold');
@@ -123,6 +125,7 @@ export default function AnimatedSplash({ ready, onDone }) {
     // Sounds + haptics land with each panel.
     const timers = PANELS.map((p, i) =>
       setTimeout(() => {
+        setNavigationBarOverride(p.bg);
         sfx.play(p.sound);
         if (p.final) haptics.medium();
         else haptics.light();
@@ -144,6 +147,7 @@ export default function AnimatedSplash({ ready, onDone }) {
     const finish = () => {
       if (statusEntry.current) StatusBar.popStackEntry(statusEntry.current);
       statusEntry.current = null;
+      setNavigationBarOverride(null); // back to the screen underneath
       setPhase('done');
       markSplashDone();
       onDone?.();

@@ -31,6 +31,7 @@ import { useSplashDone } from '@/features/splash/splashSignal';
 import GuideBubble from '@/features/guide/GuideBubble';
 import VoiceToggle from '@/features/guide/VoiceToggle';
 import voice from '@/services/voice';
+import { useNavigationBar } from '@/services/systemBars';
 import sfx from '@/services/sfx';
 import { useAppStore } from '@/store/useAppStore';
 import { colors, glass, isDark, layout, radius, space } from '@/theme/tokens';
@@ -411,6 +412,8 @@ export default function WelcomeScreen() {
     setPrefs({ introSeen: true });
     nav.navigate('phone_entry', params);
   };
+
+  useNavigationBar(isDark() ? colors.canvas : colors.periwinkle);
 
   const p = PAGES[page];
   const last = page === PAGES.length - 1;

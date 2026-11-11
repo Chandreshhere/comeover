@@ -2,9 +2,11 @@ import React from 'react';
 import { ScrollView, StatusBar, View } from 'react-native';
 import { AppText, Card, Mascot } from '@/components';
 import { colors, fonts, isDark, radius, space } from '@/theme/tokens';
+import { useNavigationBar } from '@/services/systemBars';
 
 // Shown when src/config.env.json has no backend values. There is no demo mode.
 export default function NotConfigured() {
+  useNavigationBar(colors.periwinkle);
   return (
     <View style={{ flex: 1, backgroundColor: colors.periwinkle }}>
       <StatusBar barStyle={isDark() ? 'light-content' : 'dark-content'} backgroundColor={colors.periwinkle} />
