@@ -9,8 +9,6 @@ coverage/
 *.tsbuildinfo
 
 # Secrets / local config
-.env
-.env.*
 !.env.example
 *.pem
 *.p8
@@ -47,3 +45,9 @@ Thumbs.db
 
 # Per-machine Xcode env (local Node path)
 mobile/ios/.xcode.env.local
+
+# Local device builds (phone installs use their own derived data)
+mobile/ios/build-run/
+mobile/ios/build-run.log
+mobile/ios/xcbuild-release.log
+config.bat
